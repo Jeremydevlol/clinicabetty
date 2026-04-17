@@ -1,0 +1,34 @@
+Datos del acto (autocompletados al firmar)
+Paciente: {{paciente_nombre}}
+Servicio / detalle: {{servicio_o_producto}}
+Fecha: {{fecha}}
+Centro: {{centro}}
+
+---
+
+CONSENTIMIENTO INFORMADO SOBRE EL TRATAMIENDO CON HIDROXIAPATITA CALCICA
+Es utilizado en el relleno facial en forma de microesferas de fosfato de calcio suspendidas en un gel infiltrable.
+La hidroxiapatita cálcica que aplicamos en Bettystetik consiste en un producto biocompatible (es reabsorbible) y no alérgico y cuyo efecto es de larga duración.
+La lista de sus usos más comunes:
+	•	Arrugas en la barbilla.
+	•	Arrugas peribucales (código de barras).
+	•	Defectos en nariz.
+	•	Depresiones por cicatrices y otras atrofias cutáneas.
+	•	Falta de volumen en manos.
+	•	Líneas de marioneta. -	Surco nasogeniano.
+VENTAJAS:
+El tratamiento con hidroxiapatita cálcica es mínimamente invasivo, muy rápido y consigue efectos inmediatos.
+El paciente puede volver a su domicilio tras la aplicación del tratamiento, ya que únicamente se utiliza una anestesia tópica localizada en el punto de inyección.
+Los resultados de un tratamiento con hidroxiapatita cálcica son muy naturales.
+Con las ventajas adicionales de que el producto es biocompatible, reabsorbible y no alérgico.
+EFECTOS SECUNDARIOS:
+Un tratamiento con hidroxiapatita cálcica puede presentar algunos efectos secundarios, que desaparecen en unas 12 horas. Los efectos secundarios más frecuentes son los siguientes: Enrojecimiento, hematomas, inflamación de la zona.
+INFORMACION BASICA SOBRE PROTECCION DE DATOS
+Se me ha informado de que BEATRIZ ELIANA SALAZAR OSORIO S.L.U. es responsable del tratamiento de mis datos personales y se me informa de que estos datos serás tratados de conformidad con lo dispuesto en el reglamento (UE) 2016/679, de 27 de 
+abril (GDPR), y la ley Orgánica 3/2018, de 5 de diciembre, con la finalidad de mantener una relación de servicio (en base a una relación contractual, obligación legal o interés legítimo) y serán conservados durante no mas tiempo del necesario para mantener el fin del tratamiento o mientras existan prescripciones legales que dictaminen su custodia. No se comunicarán los datos a terceros, salvo obligación legal. Así mismo, se me informa de que puedo ejercer los derechos de acceso, rectificación, portabilidad y supresión de mis datos y los de limitación y oposición a 
+Habiendo leído, y comprendido en su totalidad este documento, autorizo al 
+Dr.___________________________________________________________ para comenzar el tratamiento con Hidroxiapatita Cálcica en la zona de ______________________________
+En____________________ a _____ de ______________ de __________
+EL PACIENTE.	EL MEDICO.
+Fdo.______________________________	Fdo._____________________________
+D.N.I nº ___________________________	Nº COLEGIADO: ___________________

@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face Overlay — Clínica estética</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #080808;
+    font-family: 'DM Mono', monospace;
+    color: #ccc;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 20px 16px;
+  }
+  header { text-align:center; margin-bottom:16px; }
+  header h1 { font-size:11px; letter-spacing:5px; text-transform:uppercase; color:#7C5CBF; font-weight:400; }
+  header p  { font-size:9px; letter-spacing:2px; color:#333; margin-top:3px; }
+  header .hint { font-size:8px; color:#3a3a3a; margin-top:6px; max-width:420px; line-height:1.4; }
+
+  .cam-row {
+    margin-top:10px; font-size:9px; color:#555;
+    letter-spacing:1px; display:flex; flex-wrap:wrap;
+    justify-content:center; align-items:center; gap:8px;
+  }
+  .cam-row label { display:flex; align-items:center; gap:6px; }
+  .cam-row select {
+    background:#111; color:#ccc; border:1px solid #2a2a2a;
+    font-family:'DM Mono',monospace; font-size:9px; padding:4px 8px;
+    border-radius:2px; max-width:min(92vw, 360px);
+  }
+
+  .wrap {
+    position:relative;
+    width:100%; max-width:560px;
+    /* match camera 4:3 */
+    aspect-ratio: 4/3;
+    background:#000;
+    border:1px solid #181818;
+    border-radius:6px;
+    overflow:hidden;
+  }
+  video {
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    transform: scaleX(-1);
+  }
+  canvas {
+    position:absolute; inset:0;
+    width:100%; height:100%;
+  }
+
+  /* zone labels overlay */
+  #labels {
+    position:absolute; inset:0;
+    pointer-events:none;
+  }
+
+  .status {
+    margin-top:10px; font-size:9px; letter-spacing:3px;
+    color:#333; text-align:center; min-height:14px;
+  }
+  .status.ok  { color:#7C5CBF; }
+  .status.err { color:#a33; }
+
+  .panel {
+    display:flex; flex-wrap:wrap; gap:8px;
+    justify-content:center; margin-top:12px;
+  }
+  button {
+    background:transparent; border:1px solid #2a2a2a;
+    color:#555; padding:5px 12px;
+    font-family:'DM Mono',monospace; font-size:9px;
+    letter-spacing:2px; cursor:pointer; text-transform:uppercase;
+    border-radius:2px; transition:all .15s;
+  }
+  button:hover { border-color:#7C5CBF55; color:#aaa; }
+  button.on { border-color:#7C5CBF; color:#F2F0FF; background:#7C5CBF18; }
+
+  .sliders {
+    display:flex; flex-wrap:wrap; gap:14px;
+    justify-content:center; align-items:center;
+    margin-top:10px; font-size:9px; letter-spacing:2px; color:#444;
+  }
+  .sliders label { display:flex; align-items:center; gap:6px; }
+  input[type=range] {
+    -webkit-appearance:none; width:90px; height:1px;
+    background:#222; outline:none; cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:9px; height:9px;
+    background:#7C5CBF; border-radius:50%;
+  }
+
+  .zones-toggle {
+    display:flex; flex-wrap:wrap; gap:6px;
+    justify-content:center; margin-top:10px; max-width:560px;
+  }
+  .zone-btn {
+    font-size:8px; padding:3px 8px; letter-spacing:1px;
+  }
+  .zone-btn.on { background:#1e2a1e18; border-color:#4a9; color:#4a9; }
+
+  .ocr-block {
+    margin-top:18px; max-width:560px; width:100%;
+    padding-top:14px; border-top:1px solid #151515;
+  }
+  .ocr-hint { font-size:8px; color:#444; margin-bottom:10px; line-height:1.45; }
+  .ocr-hint code { background:#111; padding:2px 5px; border-radius:2px; color:#666; }
+  .ocr-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center; }
+  #btnOcr, #btnDeepface {
+    background:transparent; border:1px solid #3d3560;
+    color:#9a8bc4; padding:6px 14px;
+    font-family:'DM Mono',monospace; font-size:9px;
+    letter-spacing:2px; cursor:pointer; text-transform:uppercase;
+    border-radius:2px;
+  }
+  #btnOcr:hover, #btnDeepface:hover { border-color:#7C5CBF; color:#ccc; }
+  #btnOcr:disabled, #btnDeepface:disabled { opacity:0.4; cursor:wait; }
+  .ocr-out {
+    margin-top:10px; padding:10px 12px; background:#0c0c0c;
+    border:1px solid #1a1a1a; border-radius:4px;
+    font-size:9px; color:#9a9a9a; line-height:1.45;
+    white-space:pre-wrap; word-break:break-word;
+    min-height:36px; max-height:220px; overflow:auto;
+    text-align:left; width:100%;
+  }
+  .ocr-err { color:#a66; }
+
+  .clinical-tabs {
+    display:flex; flex-wrap:wrap; gap:6px; justify-content:center;
+    margin-top:14px; max-width:580px;
+  }
+  .clinical-tabs button {
+    font-size:7px; letter-spacing:0.5px; padding:6px 8px;
+    border-color:#2a2a2a; color:#666;
+  }
+  .clinical-tabs button.on { border-color:#7C5CBF; color:#ccc; background:#7C5CBF12; }
+  .clinical-tabs button.warn { border-color:#633; color:#966; }
+  .clinical-disclaimer {
+    margin-top:10px; max-width:560px; font-size:7px; line-height:1.5;
+    color:#444; text-align:center; padding:8px 10px;
+    border:1px solid #1a1a1a; border-radius:4px; background:#060606;
+  }
+  .clinical-disclaimer strong { color:#666; }
+  .hidden-panel { display:none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Face Proportion Overlay</h1>
+  <p>Uso clínico · MediaPipe 478 · varios modos de mapeo</p>
+  <p class="hint">En el Mac con localhost: Cámara de continuidad (iPhone) en el menú de cámara. Los modos no sustituyen VISIA/NEXA, MD Codes™ oficiales, ecografía Doppler ni juicio médico. Vista de perfil: el croquis se adapta; en giros extremos el modelo puede perder el rostro (limitación de la IA).</p>
+</header>
+
+<div class="clinical-tabs">
+  <button type="button" id="cFac" class="on" onclick="setClinicalType('facial')">1 · Croquis facial</button>
+  <button type="button" id="cSkin" onclick="setClinicalType('skin')">2 · Piel (zonas)</button>
+  <button type="button" id="cStr" onclick="setClinicalType('structure')">3 · Estructura / inyección</button>
+  <button type="button" id="cVas" class="warn" onclick="setClinicalType('vascular')">4 · Vascular (ref.)</button>
+</div>
+<p id="clinicalDisclaimer" class="clinical-disclaimer hidden-panel"></p>
+
+<div class="wrap">
+  <video id="vid" autoplay playsinline muted></video>
+  <canvas id="cv"></canvas>
+</div>
+
+<div id="st" class="status">Iniciando cámara...</div>
+
+<div class="cam-row">
+  <label for="camSel">Cámara</label>
+  <select id="camSel" title="Entrada de vídeo"></select>
+</div>
+
+<div id="facialPanel" class="panel">
+  <button id="bSk" class="on" onclick="setMode('sketch')">Croquis</button>
+  <button id="bMe" onclick="setMode('mesh')">Malla</button>
+  <button id="bBo" onclick="setMode('both')">Ambos</button>
+  <button id="bGu" onclick="setMode('guide')">Solo guías</button>
+</div>
+
+<div id="facialSliders" class="sliders">
+  <label>Opacidad <input type="range" id="slOp" min="15" max="100" value="88"></label>
+  <label>Grosor   <input type="range" id="slTh" min="3"  max="40"  value="14"></label>
+</div>
+
+<div id="facialZones" class="zones-toggle">
+  <button class="zone-btn on" data-zone="oval"    onclick="toggleZone(this)">Óvalo</button>
+  <button class="zone-btn on" data-zone="brows"   onclick="toggleZone(this)">Cejas</button>
+  <button class="zone-btn on" data-zone="eyes"    onclick="toggleZone(this)">Ojos</button>
+  <button class="zone-btn on" data-zone="nose"    onclick="toggleZone(this)">Nariz</button>
+  <button class="zone-btn on" data-zone="lips"    onclick="toggleZone(this)">Labios</button>
+  <button class="zone-btn on" data-zone="jaw"     onclick="toggleZone(this)">Mandíbula</button>
+  <button class="zone-btn on" data-zone="guides"  onclick="toggleZone(this)">Guías</button>
+</div>
+
+<div id="facialProfileRow" class="zones-toggle" style="margin-top:4px">
+  <button type="button" id="btnProfileOpt" class="zone-btn" onclick="toggleProfileOptimize()" title="Activa el croquis adaptado solo cuando giras la cabeza al perfil. De frente siempre usa el trazado clásico.">Perfil optimizado</button>
+</div>
+
+<div class="ocr-block">
+  <p class="ocr-hint">
+    <strong style="color:#555;">Texto en imagen (OpenAI)</strong> — solo para leer letras en papel/pantallas; no influye en el croquis facial.
+    El rostro lo alinea MediaPipe; si antes se veía descuadrado, era el mapeo del vídeo con <code>object-fit:cover</code> (ya corregido).
+    Requiere <code>face_overlay_server.py</code> y <code>OPENAI_API_KEY</code> en la terminal.
+  </p>
+  <div class="ocr-row">
+    <button type="button" id="btnOcr" onclick="runOpenAiOcr()">Extraer texto (OpenAI)</button>
+  </div>
+  <pre id="ocrOut" class="ocr-out" role="status">Aquí aparecerá el texto detectado…</pre>
+</div>
+
+<div class="ocr-block">
+  <p class="ocr-hint">
+    <strong style="color:#555;">DeepFace (local)</strong> — estimación de edad, género, emoción y grupo étnico (modelo estadístico; puede equivocarse).
+    Requiere el mismo servidor Python con <code>python3 -m pip install -r requirements-deepface.txt</code> (incluye <code>tf-keras</code> para TensorFlow 2.16+) y reiniciar.
+  </p>
+  <div class="ocr-row">
+    <button type="button" id="btnDeepface" onclick="runDeepFace()">Analizar rostro (DeepFace)</button>
+  </div>
+  <pre id="deepfaceOut" class="ocr-out" role="status">Pulsa el botón para analizar el fotograma actual de la cámara.</pre>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+const vid  = document.getElementById('vid');
+const cv   = document.getElementById('cv');
+const ctx  = cv.getContext('2d');
+const stEl = document.getElementById('st');
+const camSel = document.getElementById('camSel');
+const opSl = document.getElementById('slOp');
+const thSl = document.getElementById('slTh');
+
+let mode = 'sketch';
+/** facial | skin | structure | vascular */
+let clinicalType = 'facial';
+let R    = null; // latest mediapipe results
+let streamRef = null;
+let cameraCtl = null;
+let faceMeshRef = null;
+/** Suavizado temporal de landmarks (reduce jitter; más estable en distintos rostros). */
+let landmarkSmoothBuf = null;
+const LANDMARK_BLEND = 0.28;
+
+const zones = {oval:true, brows:true, eyes:true, nose:true, lips:true, jaw:true, guides:true};
+
+/** Si está activo: croquis mejorado solo en vista de perfil. Frente = siempre trazado clásico (como antes). */
+let profileOptimize = false;
+
+function toggleProfileOptimize() {
+  profileOptimize = !profileOptimize;
+  const b = document.getElementById('btnProfileOpt');
+  if (b) b.classList.toggle('on', profileOptimize);
+}
+
+/** Croquis “nuevo” solo con botón + cabeza de perfil. */
+function profileOn(pose) {
+  return profileOptimize && pose && pose.isProfile;
+}
+
+function setMode(m) {
+  mode = m;
+  ['Sk','Me','Bo','Gu'].forEach(x => document.getElementById('b'+x).classList.remove('on'));
+  const map = {sketch:'Sk', mesh:'Me', both:'Bo', guide:'Gu'};
+  document.getElementById('b'+map[m]).classList.add('on');
+}
+function toggleZone(btn) {
+  const z = btn.dataset.zone;
+  zones[z] = !zones[z];
+  btn.classList.toggle('on', zones[z]);
+}
+
+function setClinicalType(t) {
+  clinicalType = t;
+  ['Fac','Skin','Str','Vas'].forEach(x => {
+    const el = document.getElementById('c' + x);
+    if (el) el.classList.remove('on');
+  });
+  const map = { facial: 'Fac', skin: 'Skin', structure: 'Str', vascular: 'Vas' };
+  const id = 'c' + map[t];
+  const btn = document.getElementById(id);
+  if (btn) btn.classList.add('on');
+
+  const facialOn = t === 'facial';
+  const fp = document.getElementById('facialPanel');
+  const fs = document.getElementById('facialSliders');
+  const fz = document.getElementById('facialZones');
+  const fpr = document.getElementById('facialProfileRow');
+  const disc = document.getElementById('clinicalDisclaimer');
+  [fp, fs, fz, fpr].forEach(el => { if (el) el.classList.toggle('hidden-panel', !facialOn); });
+
+  const texts = {
+    facial: '',
+    skin: 'Mapeo por zonas (referencia visual) para hablar de acné, manchas o deshidratación por áreas. No es análisis VISIA/NEXA ni luz UV/polarizada.',
+    structure: 'Puntos anatómicos aproximados para planificación. No es el sistema MD Codes™ oficial ni sustituye evaluación dinámica del movimiento muscular.',
+    vascular: 'Solo esquema educativo de zona de precaución y trayectorias aproximadas. No muestra vasos reales ni sustituye ecografía Doppler u otro mapeo vascular.'
+  };
+  if (disc) {
+    if (texts[t]) {
+      disc.textContent = texts[t];
+      disc.classList.remove('hidden-panel');
+    } else {
+      disc.textContent = '';
+      disc.classList.add('hidden-panel');
+    }
+  }
+}
+
+// Resize canvas to match display size
+function resize() { cv.width = cv.offsetWidth; cv.height = cv.offsetHeight; }
+resize(); window.addEventListener('resize', resize);
+
+const alpha = () => parseInt(opSl.value)/100;
+const lw    = () => parseInt(thSl.value)/10;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COORDINATE HELPER
+// Landmarks are normalized to the *video frame* (videoWidth × videoHeight).
+// CSS object-fit:cover scales/crops the video to fill the canvas — we must map
+// [0,1]² → canvas pixels with the same transform as the browser, then mirror X
+// to match CSS transform: scaleX(-1) on the video.
+// ─────────────────────────────────────────────────────────────────────────────
+function videoLayout() {
+  const vw = vid.videoWidth || 1;
+  const vh = vid.videoHeight || 1;
+  const cw = cv.width || 1;
+  const ch = cv.height || 1;
+  const scale = Math.max(cw / vw, ch / vh);
+  const offsetX = (cw - vw * scale) / 2;
+  const offsetY = (ch - vh * scale) / 2;
+  return { vw, vh, scale, offsetX, offsetY };
+}
+
+function pt(lms, i) {
+  const l = lms[i];
+  const { vw, vh, scale, offsetX, offsetY } = videoLayout();
+  const nx = 1 - l.x;
+  const ny = l.y;
+  return {
+    x: nx * vw * scale + offsetX,
+    y: ny * vh * scale + offsetY
+  };
+}
+function pts(lms, arr) { return arr.map(i => pt(lms, i)); }
+
+function blendLandmarks(raw) {
+  const T = LANDMARK_BLEND;
+  if (!landmarkSmoothBuf || landmarkSmoothBuf.length !== raw.length) {
+    landmarkSmoothBuf = raw.map(p => ({ x: p.x, y: p.y, z: p.z }));
+    return landmarkSmoothBuf;
+  }
+  for (let i = 0; i < raw.length; i++) {
+    landmarkSmoothBuf[i].x = landmarkSmoothBuf[i].x * (1 - T) + raw[i].x * T;
+    landmarkSmoothBuf[i].y = landmarkSmoothBuf[i].y * (1 - T) + raw[i].y * T;
+    landmarkSmoothBuf[i].z = landmarkSmoothBuf[i].z * (1 - T) + raw[i].z * T;
+  }
+  return landmarkSmoothBuf;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+/** Sigue los landmarks al pixel (mejor para ojos/cejas que curvas suaves). */
+function polyLinear(points, close=false) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  if (close) ctx.closePath();
+  ctx.stroke();
+}
+
+function polySmooth(points, close=true) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  // Catmull-Rom style via midpoints
+  ctx.moveTo((points[0].x + points[1].x)/2, (points[0].y + points[1].y)/2);
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = (points[i].x + points[i+1].x)/2;
+    const my = (points[i].y + points[i+1].y)/2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+  }
+  if (close) {
+    const last = points[points.length-1];
+    const first= points[0];
+    const mx = (last.x + first.x)/2;
+    const my = (last.y + first.y)/2;
+    ctx.quadraticCurveTo(last.x, last.y, mx, my);
+    ctx.closePath();
+  } else {
+    ctx.lineTo(points[points.length-1].x, points[points.length-1].y);
+  }
+  ctx.stroke();
+}
+
+/** Suaviza polilínea abierta (fija extremos) — reduce zigzag en perfil. */
+function laplaceSmoothOpen(points, passes = 2) {
+  if (points.length < 3) return points.slice();
+  let out = points.map(p => ({ x: p.x, y: p.y }));
+  for (let pass = 0; pass < passes; pass++) {
+    out = out.map((p, i) => {
+      if (i === 0 || i === out.length - 1) return { x: p.x, y: p.y };
+      return {
+        x: 0.25 * out[i - 1].x + 0.5 * p.x + 0.25 * out[i + 1].x,
+        y: 0.25 * out[i - 1].y + 0.5 * p.y + 0.25 * out[i + 1].y
+      };
+    });
+  }
+  return out;
+}
+
+function laplaceSmoothClosed(points, passes = 2) {
+  if (points.length < 3) return points.slice();
+  let out = points.map(p => ({ x: p.x, y: p.y }));
+  const n = out.length;
+  for (let pass = 0; pass < passes; pass++) {
+    const next = [];
+    for (let i = 0; i < n; i++) {
+      const prev = out[(i + n - 1) % n];
+      const nxt = out[(i + 1) % n];
+      next.push({
+        x: 0.25 * prev.x + 0.5 * out[i].x + 0.25 * nxt.x,
+        y: 0.25 * prev.y + 0.5 * out[i].y + 0.25 * nxt.y
+      });
+    }
+    out = next;
+  }
+  return out;
+}
+
+function polyStrokeOpen(points) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.stroke();
+}
+
+function polyStrokeClosed(points) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LANDMARK INDEX SETS  (MediaPipe FaceMesh 468 + refine opcional)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TRUE outer silhouette — all 36 contour points MediaPipe provides
+const SILHOUETTE = [
+  10, 338,297,332,284,251,389,356,454,323,361,288,
+  397,365,379,378,400,377,152,148,176,149,150,136,
+  172,58,132,93,234,127,162,21,54,103,67,109
+];
+
+// Jawline only (bottom half of silhouette)
+const JAWLINE = [
+  172,136,150,149,176,148,152,377,400,378,379,365,397,288,361,323
+];
+
+/** Solo el lado visible en perfil (desde vértex hasta mentón), orden frente→mentón. */
+const PROFILE_OVAL_LEFT = [
+  10, 109, 67, 103, 54, 21, 162, 127, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152
+];
+const PROFILE_OVAL_RIGHT = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152
+];
+const JAW_PROFILE_LEFT  = [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152];
+const JAW_PROFILE_RIGHT = [454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152];
+
+// Ojos — contorno cerrado (orden MediaPipe, sentido consistente)
+const L_EYE = [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7];
+const R_EYE = [362,398,384,385,386,387,388,466,263,249,390,373,374,380,381,382];
+// Pliegue palpebral (refuerzo, no cierra)
+const L_EYE_CREASE = [27,28,29,30,247];
+const R_EYE_CREASE = [257,258,259,260,467];
+
+// Cejas — arco superior de la frente al puente (orden continuo, sin cruzar)
+// Ojo izquierdo de la persona (índices altos): 276→…→336 (puente nasal → sien)
+const L_BROW = [276,283,282,295,285,300,293,334,296,336];
+// Ojo derecho de la persona: 46→…→107
+const R_BROW = [46,53,52,65,55,70,63,105,66,107];
+// NOSE bridge
+const NOSE_BRIDGE = [168,6,197,195,5,4];
+/** Perfil: dorso + columela (sin simetría frontal). */
+const NOSE_PROFILE_DORSAL = [168, 6, 197, 195, 5, 4, 2];
+// Nose tip + alar base
+const NOSE_TIP_L  = [129,209,198,237,44,1,274,457,438,439]; // left nostril outer
+const NOSE_TIP_R  = [358,294];
+// Full nose bottom contour
+const NOSE_BOT = [129,102,48,115,220,45,4,275,440,344,278,331,358];
+
+// LIPS outer
+const LIPS_OUTER = [
+  61,185,40,39,37,0,267,269,270,409,
+  291,375,321,405,314,17,84,181,91,146
+];
+// LIPS inner (philtrum + inner edges)
+const LIPS_INNER = [
+  78,191,80,81,82,13,312,311,310,415,
+  308,324,318,402,317,14,87,178,88,95
+];
+// Mouth centerline
+const MOUTH_LINE = [61,291]; // corners
+
+function xsRangeLm(lms, indices) {
+  let mn = 1;
+  let mx = 0;
+  for (const i of indices) {
+    const x = lms[i].x;
+    if (x < mn) mn = x;
+    if (x > mx) mx = x;
+  }
+  return mx - mn;
+}
+
+/** yaw: nariz más cerca de 234 o de 454. isProfile: giro o un ojo muy comprimido (perfil). */
+function getHeadPose(lms) {
+  const dl = Math.abs(lms[4].x - lms[234].x);
+  const dr = Math.abs(lms[454].x - lms[4].x);
+  const yaw = (dr - dl) / (dr + dl + 1e-6);
+  const wL = xsRangeLm(lms, L_EYE);
+  const wR = xsRangeLm(lms, R_EYE);
+  const m = Math.max(wL, wR, 1e-6);
+  const visL = wL / m;
+  const visR = wR / m;
+  const isProfile = Math.abs(yaw) > 0.085 || Math.min(visL, visR) < 0.45;
+  const favorL = dl <= dr;
+  return { yaw, dl, dr, wL, wR, visL, visR, isProfile, favorL };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRAW ZONES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function drawOval(lms, a, w, pose) {
+  ctx.strokeStyle = `rgba(242,240,255,${a})`;
+  ctx.lineWidth = w * 1.45;
+  if (profileOn(pose)) {
+    const arr = pose.favorL ? PROFILE_OVAL_LEFT : PROFILE_OVAL_RIGHT;
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, arr), 3));
+  } else {
+    polyLinear(pts(lms, SILHOUETTE), true);
+  }
+}
+
+function drawJaw(lms, a, w, pose) {
+  ctx.strokeStyle = `rgba(242,240,255,${a * 0.45})`;
+  ctx.lineWidth = w * 0.65;
+  if (profileOn(pose)) {
+    const arr = pose.favorL ? JAW_PROFILE_LEFT : JAW_PROFILE_RIGHT;
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, arr), 2));
+  } else {
+    polyLinear(pts(lms, JAWLINE), false);
+  }
+}
+
+function drawBrows(lms, a, w, pose) {
+  const sL = xsRangeLm(lms, L_BROW);
+  const sR = xsRangeLm(lms, R_BROW);
+  const mx = Math.max(sL, sR, 1e-6);
+  ctx.strokeStyle = `rgba(242,240,255,${a})`;
+  if (!pose || !pose.isProfile) {
+    ctx.lineWidth = w * 1.75;
+    polyLinear(pts(lms, L_BROW), false);
+    polyLinear(pts(lms, R_BROW), false);
+    return;
+  }
+  if (!profileOn(pose)) {
+    ctx.lineWidth = w * 1.75 * (sL / mx);
+    polyLinear(pts(lms, L_BROW), false);
+    ctx.lineWidth = w * 1.75 * (sR / mx);
+    polyLinear(pts(lms, R_BROW), false);
+    return;
+  }
+  const visTh = 0.32;
+  if (pose.wL >= pose.wR * visTh) {
+    ctx.lineWidth = w * 1.75 * (sL / mx);
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, L_BROW), 2));
+  }
+  if (pose.wR >= pose.wL * visTh) {
+    ctx.lineWidth = w * 1.75 * (sR / mx);
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, R_BROW), 2));
+  }
+}
+
+function drawEyes(lms, a, w, pose) {
+  const m = Math.max(pose.wL, pose.wR, 1e-6);
+  ctx.strokeStyle = `rgba(242,240,255,${a})`;
+  const visTh = 0.32;
+  if (profileOn(pose)) {
+    if (pose.wL >= pose.wR * visTh) {
+      ctx.lineWidth = w * 1.05 * (pose.wL / m);
+      polyStrokeClosed(laplaceSmoothClosed(pts(lms, L_EYE), 2));
+    }
+    if (pose.wR >= pose.wL * visTh) {
+      ctx.lineWidth = w * 1.05 * (pose.wR / m);
+      polyStrokeClosed(laplaceSmoothClosed(pts(lms, R_EYE), 2));
+    }
+  } else {
+    ctx.lineWidth = w * 1.05 * (pose.wL / m);
+    polyLinear(pts(lms, L_EYE), true);
+    ctx.lineWidth = w * 1.05 * (pose.wR / m);
+    polyLinear(pts(lms, R_EYE), true);
+  }
+
+  if (!pose.isProfile) {
+    ctx.lineWidth = w * 0.42 * (pose.wL / m);
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.32})`;
+    polyLinear(pts(lms, L_EYE_CREASE.slice(1, 4)), false);
+    ctx.lineWidth = w * 0.42 * (pose.wR / m);
+    polyLinear(pts(lms, R_EYE_CREASE.slice(1, 4)), false);
+  }
+}
+
+function drawNose(lms, a, w, pose) {
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  const bridgeTopL = pt(lms, 285);
+  const bridgeTopR = pt(lms, 55);
+  const alarL = pt(lms, 129);
+  const alarR = pt(lms, 358);
+  const tipL  = pt(lms, 102);
+  const tipR  = pt(lms, 331);
+  const tip   = pt(lms, 4);
+  const base  = pt(lms, 2);
+
+  const favorL = pose.favorL;
+
+  if (profileOn(pose)) {
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.92})`;
+    ctx.lineWidth = w * 0.95;
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, NOSE_PROFILE_DORSAL), 3));
+
+    ctx.lineWidth = w * 0.72;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.78})`;
+    if (favorL) {
+      ctx.beginPath();
+      ctx.moveTo(bridgeTopL.x, bridgeTopL.y);
+      ctx.quadraticCurveTo(pt(lms, 51).x, pt(lms, 51).y, alarL.x, alarL.y);
+      ctx.stroke();
+      ctx.lineWidth = w * 0.88;
+      ctx.strokeStyle = `rgba(242,240,255,${a})`;
+      ctx.beginPath();
+      ctx.moveTo(alarL.x, alarL.y);
+      ctx.quadraticCurveTo(tipL.x, tipL.y + 2, tip.x, tip.y);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(bridgeTopR.x, bridgeTopR.y);
+      ctx.quadraticCurveTo(pt(lms, 281).x, pt(lms, 281).y, alarR.x, alarR.y);
+      ctx.stroke();
+      ctx.lineWidth = w * 0.88;
+      ctx.strokeStyle = `rgba(242,240,255,${a})`;
+      ctx.beginPath();
+      ctx.moveTo(alarR.x, alarR.y);
+      ctx.quadraticCurveTo(tipR.x, tipR.y + 2, tip.x, tip.y);
+      ctx.stroke();
+    }
+
+    ctx.lineWidth = w * 0.55;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.55})`;
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(pt(lms, 0).x, pt(lms, 0).y);
+    ctx.stroke();
+
+    ctx.fillStyle = `rgba(242,240,255,${a * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, w * 0.38, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  if (pose.isProfile) {
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.9})`;
+    ctx.lineWidth = w * 0.95;
+    polyLinear(pts(lms, NOSE_PROFILE_DORSAL), false);
+
+    ctx.lineWidth = w * 0.72;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.78})`;
+    if (favorL) {
+      ctx.beginPath();
+      ctx.moveTo(bridgeTopL.x, bridgeTopL.y);
+      ctx.lineTo(pt(lms, 51).x, pt(lms, 51).y);
+      ctx.lineTo(alarL.x, alarL.y);
+      ctx.stroke();
+      ctx.lineWidth = w * 0.88;
+      ctx.strokeStyle = `rgba(242,240,255,${a})`;
+      ctx.beginPath();
+      ctx.moveTo(alarL.x, alarL.y);
+      ctx.quadraticCurveTo(tipL.x, tipL.y + 2, tip.x, tip.y);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(bridgeTopR.x, bridgeTopR.y);
+      ctx.lineTo(pt(lms, 281).x, pt(lms, 281).y);
+      ctx.lineTo(alarR.x, alarR.y);
+      ctx.stroke();
+      ctx.lineWidth = w * 0.88;
+      ctx.strokeStyle = `rgba(242,240,255,${a})`;
+      ctx.beginPath();
+      ctx.moveTo(alarR.x, alarR.y);
+      ctx.quadraticCurveTo(tipR.x, tipR.y + 2, tip.x, tip.y);
+      ctx.stroke();
+    }
+
+    ctx.lineWidth = w * 0.55;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.55})`;
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(pt(lms, 0).x, pt(lms, 0).y);
+    ctx.stroke();
+
+    ctx.fillStyle = `rgba(242,240,255,${a * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, w * 0.38, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  ctx.strokeStyle = `rgba(242,240,255,${a * 0.82})`;
+  ctx.lineWidth = w * 0.78;
+  polyLinear(pts(lms, NOSE_BRIDGE), false);
+
+  ctx.lineWidth = w * 0.72;
+  ctx.strokeStyle = `rgba(242,240,255,${a * 0.75})`;
+  ctx.beginPath();
+  ctx.moveTo(bridgeTopL.x, bridgeTopL.y);
+  ctx.lineTo(pt(lms, 51).x, pt(lms, 51).y);
+  ctx.lineTo(alarL.x, alarL.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(bridgeTopR.x, bridgeTopR.y);
+  ctx.lineTo(pt(lms, 281).x, pt(lms, 281).y);
+  ctx.lineTo(alarR.x, alarR.y);
+  ctx.stroke();
+
+  ctx.lineWidth = w * 0.88;
+  ctx.strokeStyle = `rgba(242,240,255,${a})`;
+  ctx.beginPath();
+  ctx.moveTo(alarL.x, alarL.y);
+  ctx.quadraticCurveTo(tipL.x, tipL.y + 3, base.x - 2, base.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(alarR.x, alarR.y);
+  ctx.quadraticCurveTo(tipR.x, tipR.y + 3, base.x + 2, base.y);
+  ctx.stroke();
+
+  ctx.lineWidth = w * 0.65;
+  ctx.strokeStyle = `rgba(242,240,255,${a * 0.65})`;
+  ctx.beginPath();
+  ctx.moveTo(alarL.x, alarL.y);
+  ctx.lineTo(alarR.x, alarR.y);
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(242,240,255,${a * 0.45})`;
+  ctx.beginPath();
+  ctx.arc(tip.x, tip.y, w * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawLips(lms, a, w, pose) {
+  ctx.strokeStyle = `rgba(242,240,255,${a})`;
+  ctx.lineWidth = w * 1.15;
+  if (profileOn(pose)) {
+    polyStrokeClosed(laplaceSmoothClosed(pts(lms, LIPS_OUTER), 2));
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.55})`;
+    ctx.lineWidth = w * 0.68;
+    polyStrokeClosed(laplaceSmoothClosed(pts(lms, LIPS_INNER), 2));
+    ctx.lineWidth = w * 0.5;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.42})`;
+    const ml = pose.favorL ? [61, 0, 291] : [291, 0, 61];
+    polyStrokeOpen(laplaceSmoothOpen(pts(lms, ml), 1));
+  } else {
+    polyLinear(pts(lms, LIPS_OUTER), true);
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.55})`;
+    ctx.lineWidth = w * 0.68;
+    polyLinear(pts(lms, LIPS_INNER), true);
+    ctx.lineWidth = w * 0.5;
+    ctx.strokeStyle = `rgba(242,240,255,${a * 0.42})`;
+    polyLinear(pts(lms, [37, 0, 267]), false);
+  }
+}
+
+function drawGuides(lms, a, pose) {
+  const browY  = (pt(lms, 70).y + pt(lms, 300).y) / 2;
+  const eyeY   = (pt(lms, 159).y + pt(lms, 386).y) / 2;
+  const noseY  = pt(lms, 4).y;
+  const mouthY = pt(lms, 0).y;
+  const chinY  = pt(lms, 152).y;
+  const topY   = pt(lms, 10).y;
+
+  const lx = pt(lms, 234).x;
+  const rx = pt(lms, 454).x;
+  const cx = (lx + rx) / 2;
+  const nx = pt(lms, 4).x;
+  const faceH = Math.max(chinY - topY, 1);
+  const pad = profileOn(pose)
+    ? Math.max((rx - lx) * 0.18, faceH * 0.14)
+    : (rx - lx) * 0.18;
+
+  ctx.save();
+  ctx.setLineDash([4, 6]);
+  ctx.lineWidth = 0.55;
+
+  ctx.strokeStyle = `rgba(124,92,191,${a * 0.42})`;
+  ctx.beginPath();
+  const vx = pose && pose.isProfile ? nx : cx;
+  ctx.moveTo(vx, topY - 12);
+  ctx.lineTo(vx, chinY + 14);
+  ctx.stroke();
+
+  ctx.strokeStyle = `rgba(242,240,255,${a * 0.22})`;
+  [browY, eyeY, noseY, mouthY, chinY].forEach(y => {
+    ctx.beginPath();
+    ctx.moveTo(lx - pad, y);
+    ctx.lineTo(rx + pad, y);
+    ctx.stroke();
+  });
+
+  ctx.strokeStyle = `rgba(124,92,191,${a * 0.14})`;
+  if (!pose || !pose.isProfile) {
+    [lx, cx, rx].forEach(x => {
+      ctx.beginPath();
+      ctx.moveTo(x, topY + 4);
+      ctx.lineTo(x, chinY);
+      ctx.stroke();
+    });
+  } else {
+    [lx, nx, rx].forEach(x => {
+      ctx.beginPath();
+      ctx.moveTo(x, topY + 4);
+      ctx.lineTo(x, chinY);
+      ctx.stroke();
+    });
+  }
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawMesh(lms, a) {
+  ctx.save();
+  ctx.fillStyle = `rgba(124,92,191,${a*0.55})`;
+  const count = Math.min(lms.length, 468);
+  for (let i = 0; i < count; i++) {
+    const p = pt(lms, i);
+    ctx.beginPath(); ctx.arc(p.x, p.y, 1.3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawLabel(x, y, text, color, size = 9) {
+  ctx.font = `${size}px "DM Mono", monospace`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+}
+
+function drawSkinZones(lms, a, pose) {
+  const top = pt(lms, 10).y;
+  const browY = (pt(lms, 70).y + pt(lms, 300).y) / 2;
+  const noseY = pt(lms, 4).y;
+  const mouthY = pt(lms, 0).y;
+  const chinY = pt(lms, 152).y;
+  const lx = pt(lms, 234).x;
+  const rx = pt(lms, 454).x;
+  const cx = (lx + rx) / 2;
+  const pad = (rx - lx) * 0.18;
+  const prof = pose && pose.isProfile;
+
+  ctx.fillStyle = `rgba(120, 180, 255, ${0.16 * a})`;
+  ctx.strokeStyle = `rgba(120, 180, 255, ${0.32 * a})`;
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.rect(lx - pad, top, rx - lx + pad * 2, browY - top);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(255, 190, 120, ${0.14 * a})`;
+  ctx.strokeStyle = `rgba(255, 190, 120, ${0.3 * a})`;
+  ctx.beginPath();
+  ctx.rect(lx - pad, browY, rx - lx + pad * 2, noseY - browY);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(120, 255, 180, ${0.12 * a})`;
+  ctx.strokeStyle = `rgba(120, 255, 180, ${0.28 * a})`;
+  if (!prof) {
+    ctx.beginPath();
+    ctx.rect(lx - pad, noseY, cx - (lx - pad), mouthY - noseY);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.rect(cx, noseY, rx + pad - cx, mouthY - noseY);
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.rect(lx - pad, noseY, rx - lx + pad * 2, mouthY - noseY);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = `rgba(255, 220, 140, ${0.14 * a})`;
+  ctx.strokeStyle = `rgba(255, 220, 140, ${0.28 * a})`;
+  ctx.beginPath();
+  ctx.rect(lx - pad, mouthY, rx - lx + pad * 2, chinY - mouthY);
+  ctx.fill();
+  ctx.stroke();
+
+  const nx = pt(lms, 4).x;
+  drawLabel(prof ? nx : cx, (top + browY) / 2, prof ? 'Frente (perfil)' : 'Frente', `rgba(200,220,255,${a})`, 8);
+  drawLabel(prof ? nx : cx, (browY + noseY) / 2, 'T / zona central', `rgba(255,220,180,${a})`, 0.65 * 8);
+  if (!prof) {
+    drawLabel((lx + cx) / 2, (noseY + mouthY) / 2, 'Mej. izq.', `rgba(180,255,200,${a})`, 8);
+    drawLabel((cx + rx) / 2, (noseY + mouthY) / 2, 'Mej. der.', `rgba(180,255,200,${a})`, 8);
+  } else {
+    drawLabel((lx + rx) / 2, (noseY + mouthY) / 2, 'Mejilla (vista lateral)', `rgba(180,255,200,${a})`, 8);
+  }
+  drawLabel(cx, (mouthY + chinY) / 2, 'Perioral / mentón', `rgba(255,230,180,${a})`, 8);
+}
+
+function structureVis(i, pose) {
+  if (!pose || !pose.isProfile) return 1;
+  if ([168, 8, 4, 152].includes(i)) return 0.95;
+  if ([33, 116, 234, 61].includes(i)) return pose.visL;
+  if ([263, 345, 454, 291].includes(i)) return pose.visR;
+  return 0.85;
+}
+
+function drawStructureMap(lms, a, pose) {
+  const pts = [
+    { i: 168, n: '1', t: 'Glabela' },
+    { i: 8, n: '2', t: 'Raíz nasal' },
+    { i: 4, n: '3', t: 'Punta nasal' },
+    { i: 152, n: '4', t: 'Mentón' },
+    { i: 234, n: '5', t: 'Áng. mand. izq' },
+    { i: 454, n: '6', t: 'Áng. mand. der' },
+    { i: 116, n: '7', t: 'Pómulo izq' },
+    { i: 345, n: '8', t: 'Pómulo der' },
+    { i: 33, n: '9', t: 'Cant. ojo izq' },
+    { i: 263, n: '10', t: 'Cant. ojo der' },
+    { i: 61, n: '11', t: 'Comisura izq' },
+    { i: 291, n: '12', t: 'Comisura der' }
+  ];
+  const r0 = 5 + lw() * 0.5;
+  pts.forEach(({ i, n, t }) => {
+    const vis = structureVis(i, pose);
+    if (vis < 0.12) return;
+    const p = pt(lms, i);
+    const r = r0 * Math.max(0.35, vis);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(124, 92, 191, ${0.55 * a * vis})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(242, 240, 255, ${a * vis})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    drawLabel(p.x, p.y - r - 2, n, `rgba(255,255,255,${a * vis})`, 8);
+    drawLabel(p.x, p.y + r + 6, t, `rgba(160,160,180,${0.85 * a * vis})`, 6);
+  });
+}
+
+function drawVascularRef(lms, a, pose) {
+  const p61 = pt(lms, 61);
+  const p291 = pt(lms, 291);
+  const p4 = pt(lms, 4);
+  ctx.beginPath();
+  ctx.moveTo(p61.x, p61.y);
+  ctx.lineTo(p4.x, p4.y);
+  ctx.lineTo(p291.x, p291.y);
+  ctx.closePath();
+  ctx.fillStyle = `rgba(200, 80, 80, ${0.12 * a})`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(255, 120, 120, ${0.45 * a})`;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  const tcx = (p61.x + p291.x + p4.x) / 3;
+  const tcy = (p61.y + p291.y + p4.y) / 3;
+  drawLabel(tcx, tcy - 5, 'Zona de precaución (oral)', `rgba(255,180,160,${a})`, 7);
+  drawLabel(tcx, tcy + 5, '/ maxilar — referencia', `rgba(255,180,160,${0.85 * a})`, 6);
+
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = `rgba(255, 100, 100, ${0.35 * a})`;
+  ctx.lineWidth = 1;
+  const j234 = pt(lms, 234);
+  const j152 = pt(lms, 152);
+  const j454 = pt(lms, 454);
+  if (!pose || !pose.isProfile) {
+    ctx.beginPath();
+    ctx.moveTo(j234.x, j234.y);
+    ctx.quadraticCurveTo((j234.x + j152.x) / 2, j152.y - 8, j152.x, j152.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(j454.x, j454.y);
+    ctx.quadraticCurveTo((j454.x + j152.x) / 2, j152.y - 8, j152.x, j152.y);
+    ctx.stroke();
+  } else {
+    const favorL = pose.dl <= pose.dr;
+    ctx.beginPath();
+    if (favorL) {
+      ctx.moveTo(j234.x, j234.y);
+      ctx.quadraticCurveTo((j234.x + j152.x) / 2, j152.y - 8, j152.x, j152.y);
+    } else {
+      ctx.moveTo(j454.x, j454.y);
+      ctx.quadraticCurveTo((j454.x + j152.x) / 2, j152.y - 8, j152.x, j152.y);
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  drawLabel((j234.x + j454.x) / 2, j152.y - 14, 'Trayectoria aprox. (referencia)', `rgba(255,180,160,${0.7 * a})`, 6);
+  drawLabel(pt(lms, 4).x, Math.min(pt(lms, 10).y, j152.y) + 10, 'No es Doppler ni mapa vascular real', `rgba(255,120,120,${0.9 * a})`, 7);
+}
+
+function cxFromLms(lms) {
+  return (pt(lms, 234).x + pt(lms, 454).x) / 2;
+}
+
+function drawSilhouetteHint(lms, a) {
+  ctx.save();
+  ctx.strokeStyle = `rgba(242,240,255,${0.12 * a})`;
+  ctx.lineWidth = 0.9;
+  polyLinear(pts(lms, SILHOUETTE), true);
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RENDER LOOP
+// ─────────────────────────────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  if (R && R.multiFaceLandmarks && R.multiFaceLandmarks[0]) {
+    const lms = R.multiFaceLandmarks[0];
+    const a   = alpha();
+    const w   = lw();
+
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    const pose = getHeadPose(lms);
+
+    if (clinicalType !== 'facial') {
+      drawSilhouetteHint(lms, a);
+      if (clinicalType === 'skin') drawSkinZones(lms, a, pose);
+      else if (clinicalType === 'structure') drawStructureMap(lms, a, pose);
+      else if (clinicalType === 'vascular') drawVascularRef(lms, a, pose);
+    } else {
+      const sk = mode === 'sketch' || mode === 'both';
+      const ms = mode === 'mesh'   || mode === 'both';
+
+      if (ms) drawMesh(lms, a);
+
+      if (sk) {
+        if (zones.oval)   drawOval(lms, a, w, pose);
+        if (zones.jaw)    drawJaw(lms, a, w, pose);
+        if (zones.brows)  drawBrows(lms, a, w, pose);
+        if (zones.eyes)   drawEyes(lms, a, w, pose);
+        if (zones.nose)   drawNose(lms, a, w, pose);
+        if (zones.lips)   drawLips(lms, a, w, pose);
+      }
+
+      if (zones.guides && (mode === 'guide' || mode === 'sketch' || mode === 'both')) {
+        drawGuides(lms, a, pose);
+      }
+    }
+  }
+
+  requestAnimationFrame(render);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAMERA (Mac localhost + Continuity Camera = iPhone como entrada de vídeo)
+// ─────────────────────────────────────────────────────────────────────────────
+function gumFn() {
+  const md = navigator.mediaDevices;
+  return md && typeof md.getUserMedia === 'function'
+    ? (c) => md.getUserMedia(c)
+    : null;
+}
+
+function stopStream() {
+  if (streamRef) {
+    streamRef.getTracks().forEach(t => t.stop());
+    streamRef = null;
+  }
+  vid.srcObject = null;
+}
+
+async function startStream(deviceId) {
+  const gum = gumFn();
+  const constraints = deviceId
+    ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } }
+    : { video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 } } };
+  const stream = await gum(constraints);
+  streamRef = stream;
+  vid.srcObject = stream;
+  await new Promise(r => { vid.onloadedmetadata = r; });
+  await vid.play();
+  resize();
+}
+
+function fillCamSelect(devices, selectedId) {
+  camSel.innerHTML = '';
+  devices.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || 'Cámara';
+    if (d.deviceId === selectedId) opt.selected = true;
+    camSel.appendChild(opt);
+  });
+}
+
+function preferredDeviceId(devices) {
+  const byLabel = (re) => devices.find(d => re.test(d.label || ''));
+  const hit =
+    byLabel(/iphone|continuity camera/i) ||
+    byLabel(/iphone/i) ||
+    byLabel(/continuity/i);
+  return (hit && hit.deviceId) || (devices[0] && devices[0].deviceId) || '';
+}
+
+async function refreshCamListAndSelect() {
+  const devices = (await navigator.mediaDevices.enumerateDevices())
+    .filter(d => d.kind === 'videoinput');
+  const sel = camSel.value || preferredDeviceId(devices);
+  fillCamSelect(devices, sel);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenAI OCR (POST /api/ocr en el mismo origen — usar face_overlay_server.py)
+// ─────────────────────────────────────────────────────────────────────────────
+async function runOpenAiOcr() {
+  const btn = document.getElementById('btnOcr');
+  const out = document.getElementById('ocrOut');
+  if (!vid.videoWidth || !vid.videoHeight) {
+    out.textContent = '✗ La cámara aún no tiene imagen.';
+    out.className = 'ocr-out ocr-err';
+    return;
+  }
+  btn.disabled = true;
+  out.className = 'ocr-out';
+  out.textContent = 'Enviando imagen a OpenAI…';
+
+  const snap = document.createElement('canvas');
+  snap.width = vid.videoWidth;
+  snap.height = vid.videoHeight;
+  const sx = snap.getContext('2d');
+  sx.drawImage(vid, 0, 0);
+
+  const dataUrl = snap.toDataURL('image/jpeg', 0.88);
+  const imageBase64 = dataUrl.indexOf(',') >= 0 ? dataUrl.split(',')[1] : '';
+
+  try {
+    const res = await fetch('/api/ocr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_base64: imageBase64 })
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(j.error || res.statusText || 'Error del servidor');
+    }
+    if (typeof j.text !== 'string') {
+      throw new Error('Respuesta inesperada');
+    }
+    out.className = 'ocr-out';
+    out.textContent = j.text || '(vacío)';
+  } catch (e) {
+    out.className = 'ocr-out ocr-err';
+    const hint =
+      (e && e.message) || String(e);
+    out.textContent =
+      '✗ ' + hint +
+      '\n\nSi ves «Failed to fetch» o 404: arranca el servidor con\n' +
+      '  OPENAI_API_KEY=sk-… python3 face_overlay_server.py\n' +
+      'y abre la página desde ese puerto (no uses solo «python -m http.server»).';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function formatDeepFaceResult(j) {
+  const lines = [];
+  if (j.age != null) lines.push('Edad estimada: ' + j.age);
+  if (j.dominant_gender) lines.push('Género (dominante): ' + j.dominant_gender);
+  if (j.gender && typeof j.gender === 'object') {
+    const parts = Object.keys(j.gender).map(k => {
+      const v = j.gender[k];
+      const p = typeof v === 'number' ? (v <= 1 ? (v * 100).toFixed(0) + '%' : String(v)) : String(v);
+      return k + ': ' + p;
+    });
+    if (parts.length) lines.push('Prob. género: ' + parts.join(', '));
+  }
+  if (j.dominant_emotion) lines.push('Emoción dominante: ' + j.dominant_emotion);
+  if (j.dominant_race) lines.push('Grupo étnico (modelo): ' + j.dominant_race);
+  if (lines.length === 0) return JSON.stringify(j, null, 2);
+  lines.push('');
+  lines.push('— Solo referencia; no sustituye valoración clínica.');
+  return lines.join('\n');
+}
+
+async function runDeepFace() {
+  const btn = document.getElementById('btnDeepface');
+  const out = document.getElementById('deepfaceOut');
+  if (!vid.videoWidth || !vid.videoHeight) {
+    out.textContent = '✗ La cámara aún no tiene imagen.';
+    out.className = 'ocr-out ocr-err';
+    return;
+  }
+  btn.disabled = true;
+  out.className = 'ocr-out';
+  out.textContent = 'Analizando con DeepFace (puede tardar la primera vez)…';
+
+  const snap = document.createElement('canvas');
+  snap.width = vid.videoWidth;
+  snap.height = vid.videoHeight;
+  const sx = snap.getContext('2d');
+  sx.drawImage(vid, 0, 0);
+
+  const dataUrl = snap.toDataURL('image/jpeg', 0.88);
+  const imageBase64 = dataUrl.indexOf(',') >= 0 ? dataUrl.split(',')[1] : '';
+
+  try {
+    const res = await fetch('/api/deepface', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_base64: imageBase64 })
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.ok === false) {
+      throw new Error(j.error || res.statusText || 'Error del servidor');
+    }
+    out.className = 'ocr-out';
+    out.textContent = formatDeepFaceResult(j);
+  } catch (e) {
+    out.className = 'ocr-out ocr-err';
+    const hint = (e && e.message) || String(e);
+    out.textContent =
+      '✗ ' + hint +
+      '\n\nInstala en el mismo entorno del servidor:\n' +
+      '  python3 -m pip install tf-keras\n' +
+      '  (o todo: python3 -m pip install -r requirements-deepface.txt)\n' +
+      'y reinicia face_overlay_server.py. Abre la página desde ese puerto.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function switchCamera() {
+  const gum = gumFn();
+  if (!gum) return;
+  try {
+    stEl.textContent = 'Cambiando cámara...';
+    if (cameraCtl) {
+      cameraCtl.stop();
+      cameraCtl = null;
+    }
+    stopStream();
+    const id = camSel.value;
+    await startStream(id || undefined);
+    await refreshCamListAndSelect();
+    cameraCtl = new Camera(vid, {
+      onFrame: async () => { await faceMeshRef.send({ image: vid }); },
+      width: 1920, height: 1080
+    });
+    await cameraCtl.start();
+    stEl.textContent = '○ Buscando rostro...';
+    stEl.className = 'status';
+  } catch (e) {
+    stEl.className = 'status err';
+    stEl.textContent = '✗ ' + ((e && e.message) || String(e));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────────────────────────
+async function init() {
+  const gum = gumFn();
+  try {
+    stEl.textContent = 'Solicitando cámara...';
+
+    if (!gum) {
+      stEl.className = 'status err';
+      stEl.textContent =
+        '✗ Cámara bloqueada: esta página no es HTTPS. En el móvil, http://192.168… no permite getUserMedia. ' +
+        'Solución: en el Mac ejecuta «ngrok http 8765» (o cloudflared) y abre en el teléfono la URL https que te dé. ' +
+        'O prueba solo en el Mac con http://localhost:8765/…';
+      return;
+    }
+
+    // Permiso + etiquetas de dispositivos
+    const tmp = await gum({ video: true });
+    tmp.getTracks().forEach(t => t.stop());
+
+    const devices = (await navigator.mediaDevices.enumerateDevices())
+      .filter(d => d.kind === 'videoinput');
+    const pick = preferredDeviceId(devices);
+    fillCamSelect(devices, pick);
+
+    await startStream(camSel.value || pick || undefined);
+
+    stEl.textContent = 'Cargando MediaPipe Face Mesh...';
+
+    faceMeshRef = new FaceMesh({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+    });
+
+    faceMeshRef.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.38,
+      minTrackingConfidence: 0.48
+    });
+
+    faceMeshRef.onResults(res => {
+      let out = res;
+      let poseNote = '';
+      if (res.multiFaceLandmarks && res.multiFaceLandmarks[0]) {
+        const blended = blendLandmarks(res.multiFaceLandmarks[0]);
+        out = { ...res, multiFaceLandmarks: [blended] };
+        const hp = getHeadPose(blended);
+        if (hp.isProfile) {
+          poseNote = profileOptimize
+            ? ' · Vista lateral / perfil · croquis adaptado'
+            : ' · Vista lateral / perfil';
+        }
+      } else {
+        landmarkSmoothBuf = null;
+      }
+      R = out;
+      const found = out.multiFaceLandmarks && out.multiFaceLandmarks.length > 0;
+      stEl.textContent = found
+        ? '● Rostro detectado — todos los puntos activos' + poseNote
+        : '○ Buscando rostro...';
+      stEl.className = 'status' + (found ? ' ok' : '');
+    });
+
+    cameraCtl = new Camera(vid, {
+      onFrame: async () => { await faceMeshRef.send({ image: vid }); },
+      width: 1920, height: 1080
+    });
+    await cameraCtl.start();
+    render();
+    stEl.textContent = '○ Buscando rostro...';
+
+    camSel.addEventListener('change', switchCamera);
+
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        refreshCamListAndSelect().catch(() => {});
+      });
+    }
+
+  } catch (e) {
+    stEl.className = 'status err';
+    const msg = (e && (e.message || String(e))) || 'Error desconocido';
+    stEl.textContent = e && e.name === 'NotAllowedError'
+      ? '✗ Permiso de cámara denegado — actívalo en el navegador'
+      : '✗ ' + msg;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

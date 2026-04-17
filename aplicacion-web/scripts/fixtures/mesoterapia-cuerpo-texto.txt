@@ -1,0 +1,33 @@
+Datos del acto (autocompletados al firmar)
+Paciente: {{paciente_nombre}}
+Servicio / detalle: {{servicio_o_producto}}
+Fecha: {{fecha}}
+Centro: {{centro}}
+
+---
+
+CONSENTIMIENTO INFORMADO DE MESOTERAPIA
+TÉCNICA: 
+Es una técnica poco invasiva, cuyo objetivo es una mejoría del estado de la piel, mediante la infiltración subdérmica de principios activos específicos, indicados para su diagnóstico.
+Los resultados son duraderos bajo los criterios e indicaciones sanitarias. Se recomienda un mínimo de 10 sesiones para obtener resultados ante el diagnostico con una frecuencia de 1 sesión semanal.
+POSIBLES RIESGOS:
+Sera necesario informar sobre alergias, alteraciones o enfermedades que puedan afectar al procedimiento.  Puede haber alteraciones derivadas de un mal cuidado posterior: hinchazón, enrojecimiento, dolor, escozor, reacciones alérgicas, hematomas o infección. Si existe herpes deberá ser tratado previamente y posteriormente al tratamiento bajo indicación sanitaria. Estos síntomas desaparecerán espontáneamente tras varios días.
+INDICACIONES:
+Tras el procedimiento es conveniente que realice los cuidados necesarios para conseguir los resultados óptimos del tratamiento:
+	•	-No realizar deporte o ejercicio en las 24 horas siguientes.
+	•	-No realizar actividades que produzcan sudoración en la zona en 24 horas.
+	•	-No aplicar calor en la zona en 24 horas
+	•	-No exposición solar en 48 horas y aplicación de protección solar continua.
+	•	-No manipular la zona tratada en 48h.
+	•	-No aplicar cremas ni maquillaje sobre la zona tratada en 24h.
+	•	-Aplicar tratamiento indicado por profesional sanitario en caso necesario.
+CONTRAINDICACIONES:
+	•	-Embarazo y lactancia.
+	•	-Heridas abiertas en la zona del tratamiento.
+	•	-Infecciones activas en la zona del tratamiento.  -Enfermedades autoinmunes.
+Se me ha facilitado esta hoja informativa, habiendo comprendido el significado del procedimiento y los riesgos inherentes al mismo y declaro estar debidamente informado/a, habiendo tenido la oportunidad de aclarar mis dudas en entrevista personal con el personal sanitario. Asimismo, he recibido respuesta a todas mis preguntas, habiendo tomado la decisión de manera libre y voluntaria.
+
+INFORMACIÓN BASICA SOBRE PROTECCION DE DATOS: Se me ha informado de que BEATRIZ ELIANA SALAZAR OSORIO S.L.U. es responsable del tratamiento de mis datos personales y se me informa de que estos serán tratados de conformidad con lo dispuesto en el Reglamento (UE) 2016/679, de 27 de abril (GDPR), y la ley Orgánica 3/2018, de 5 de diciembre (LOPDGDD), con la finalidad de mantener una relación de servicios (en base a una relación contractual, obligación legal o interés legítimo) y serán conservados durante no mas del tiempo necesario para mantener el fin del tratamiento o mientras existan prescripciones legales que dictaminen su custodia. No se comunicarán los datos a terceros, salvo obligación legal. Asimismo, se me informa de que puedo ejercer los derechos de acceso, rectificación, portabilidad y supresión de mis datos y los de limitación y oposición a su tratamiento dirigiéndome a BEATRIZ ELIANA SALAZAR OSORIO S.L.U en Calle San Antonio de Padua, 10 – 28026 Madrid – España. Email: bettystetik3@gmail.com
+
+En____________________________ a __________ de _____________________ del_______________
+Fdo. Paciente: 	Fdo. Padre, Madre o Tutor:	Fdo Sanitario:

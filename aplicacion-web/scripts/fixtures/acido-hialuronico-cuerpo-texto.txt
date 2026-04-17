@@ -1,0 +1,29 @@
+Datos del acto (autocompletados al firmar)
+Paciente: {{paciente_nombre}}
+Servicio / detalle: {{servicio_o_producto}}
+Fecha: {{fecha}}
+Centro: {{centro}}
+
+---
+
+CONSENTIMIENTO INFORMADO	                                
+NOMBRE:	                     APELLIDOS:
+NIF/NIE:                                                                                     E-MAIL FECHA NACIMIENTO:                                                              TFNO:
+DATOS DEL CENTRO                                                                 Nº COLEGIADO
+ACIDO HIALURONICO
+TECNICA: El objetivo de la técnica es conseguir un relleno dérmico en el tratamiento de arrugas, cicatrices, deformidades del contorno o aumento de labios.  El ácido hialurónico es una sustancia producida naturalmente por el cuerpo humano, aumenta la lubricación y la hidratación y reduce el desgaste del cartílago.  El tratamiento consiste en inyectar en la piel una sustancia sintética para producir un relleno dérmico.  La duración del efecto obtenido es variable dependiendo de las características propias de la persona y su capacidad regeneradora.  Se podrá realizar retoques tras su absorción completa o parcial para mantener el efecto deseado bajo el criterio y valoración sanitaria. Puede ser necesaria la aplicación de anestesia tópica o local bajo criterio sanitario.
+RIESGOS: Sera necesario informar sobre alergias, alteraciones o enfermedades que puedan afectar al procedimiento. Se producirán pequeños puntos de inserción que serán tratados como heridas y por lo tanto cualquier riesgo derivado de ello o de un mal cuidado: hinchazón, enrojecimiento, dolor, escozor, reacciones alérgicas, hematomas o infección, deberás informarnos de ello.  Si existe herpes deberá ser tratado previamente y posteriormente al tratamiento bajo indicación sanitaria.  Estos síntomas desaparecerán espontáneamente tras varios días habitualmente. Excepcionalmente pueden aparecer reacciones tardías, abscesos o necrosis.
+INDICACIONES: Tras el procedimiento es conveniente que realice los cuidados necesarios para conseguir los resultados óptimos del tratamiento.
+-No realizar deporte o ejercicio en las 48 horas siguientes
+-No realizar actividades que produzcan sudoración en la zona en 48horas.
+-No aplicar calor a la zona en 48 horas.
+-No exposición solar en 48 horas.
+-Evitar reposar o aplicar presión sobre la zona infiltrada.
+-No manipular la zona infiltrada en los próximos 7 días.
+-No aplicar cremas ni maquillajes sobre la zona en 48 horas.
+-Aplicar tratamiento indicado para inflamación o dolor en la zona.
+CONTRAINDICACIONES: Embarazo, alergia severa al ácido hialurónico o manitol, avisar en caso de alergia a lidocaína.
+Se me ha facilitado esta informativa, habiendo comprendido el significado del procedimiento y los riesgos inherentes al mismo y declaro estar debidamente informada, habiendo tenido la oportunidad de aclarar mis dudas en entrevista personal con el personal sanitario. Asimismo, he recibido respuesta a todas mis preguntas, habiendo tomado la decisión de manera libre y voluntaria.
+INFORMACION BASICA SOBRE PROTECCION DE DATOS: Se me ha informado de que BEATRIZ ELIANA SALAZAR OSORIO es Responsable del tratamiento de mis datos personales y se me informa de que estos datos serán tratados de conformidad con lo dispuesto en el reglamento (UE) 2016/679, de 27 de abril (GDPR) y la ley orgánica 3/2008 de 5 de diciembre (LOPDGDD), con la finalidad de mantener una relación de servicios ( en base a una relación contractual, obligación legal o interés legítimo) y serán conservados durante no mas tiempo del necesario para mantener el fin del tratamiento o mientras exista prescripciones legales que dictaminen su custodia.  No se comunicará los datos a terceros, salvo obligación legal.  Asimismo, se me informa de que puedo ejercer los derechos de acceso, rectificación, portabilidad, y supresión de mis datos y los de limitación y oposición a su tratamiento dirigiéndome a BEATRIZ ELIANA SALAZAR OSORIO, en Calle San Antonio de Padua, 10 Madrid, E-mail: bettystetik3@gmail.com
+En___________________ a____________ de__________________ de_____________________
+Fdo Paciente:                                                               Fdo Madre, Padre o Tutor                                           Fdo Sanitario:

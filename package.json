@@ -1,0 +1,11 @@
+{
+  "name": "clinica-erp-root",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix aplicacion-web",
+    "build": "npm run build --prefix aplicacion-web",
+    "preview": "npm run preview --prefix aplicacion-web",
+    "lint": "npm run lint --prefix aplicacion-web",
+    "db:fix-auth-user-id": "npm run db:fix-auth-user-id --prefix aplicacion-web"
+  }
+}
