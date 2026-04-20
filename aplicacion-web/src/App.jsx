@@ -8470,6 +8470,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       setFaceDfErr("")
       setFaceDfResult(j)
       if (background) setFaceDfLiveTick(t => t + 1)
+      // Encadenar el análisis clínico-estético (OpenAI Vision) cuando el usuario
+      // pidió DeepFace de forma manual. Así, además de los atributos crudos,
+      // recibe un diagnóstico interpretado (tipo de piel, simetrías, recomendaciones…).
+      if (!background) {
+        void ejecutarAnalisisRealRef.current?.({ background: false })
+      }
       return true
     } catch (e) {
       setFaceDfErr(String(e?.message || e))
