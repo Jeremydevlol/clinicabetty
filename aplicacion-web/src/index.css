@@ -229,6 +229,108 @@ input:focus, select:focus, textarea:focus {
 }
 .erp-fadein { animation: erp-fadein 0.35s ease both; }
 
+/* ─────────────────────────────────────────────────────────
+   ÁREA MÉDICA · captura de fotos (Liquid Glass interactivo)
+───────────────────────────────────────────────────────── */
+@keyframes erp-cam-scan {
+  0%   { transform: translateY(-110%); opacity: 0; }
+  20%  { opacity: 0.85; }
+  80%  { opacity: 0.85; }
+  100% { transform: translateY(110%); opacity: 0; }
+}
+@keyframes erp-cam-grid {
+  0%, 100% { opacity: 0.18; }
+  50%      { opacity: 0.32; }
+}
+@keyframes erp-cam-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(167,139,250,0)); }
+  50%      { transform: scale(1.08); filter: drop-shadow(0 0 16px rgba(167,139,250,0.55)); }
+}
+
+.erp-cam-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 16px;
+  text-align: center;
+  background:
+    radial-gradient(60% 50% at 50% 45%, rgba(124,58,237,0.28) 0%, rgba(17,24,39,0) 70%),
+    repeating-linear-gradient(0deg, rgba(167,139,250,0.10) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(167,139,250,0.10) 0 1px, transparent 1px 28px);
+  animation: erp-cam-grid 4s ease-in-out infinite;
+  overflow: hidden;
+}
+.erp-cam-empty::before {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(167,139,250,0.85) 50%, transparent 100%);
+  filter: drop-shadow(0 0 6px rgba(167,139,250,0.7));
+  animation: erp-cam-scan 3.2s ease-in-out infinite;
+  pointer-events: none;
+  top: 0;
+}
+.erp-cam-empty .erp-cam-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(167,139,250,0.22), rgba(99,102,241,0.18));
+  border: 1px solid rgba(167,139,250,0.45);
+  color: #e9d5ff;
+  animation: erp-cam-pulse 2.4s ease-in-out infinite;
+}
+.erp-cam-empty .erp-cam-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+}
+
+/* botones de acción glass del área médica */
+.erp-glass-btn {
+  position: relative;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease,
+    filter 0.18s ease !important;
+  will-change: transform, box-shadow;
+}
+.erp-glass-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px -14px rgba(124,58,237,.55), 0 0 0 1px rgba(167,139,250,.35) inset;
+  filter: brightness(1.06);
+}
+.erp-glass-btn:not(:disabled):active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+.erp-glass-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* badge animado del header del card */
+@keyframes erp-icon-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(167,139,250,0.45); }
+  50%      { box-shadow: 0 0 0 6px rgba(167,139,250,0); }
+}
+.erp-icon-badge { animation: erp-icon-breathe 2.6s ease-in-out infinite; }
+
 @media (max-width: 1024px) {
   :root { font-size: 16px; }
   h1 { font-size: 36px !important; margin: 20px 0 !important; }

@@ -10072,17 +10072,25 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     zIndex: 2,
   }
   const medCardDark = {
-    background: "linear-gradient(160deg, rgba(17,24,39,0.92) 0%, rgba(15,23,42,0.9) 100%)",
-    backdropFilter: "blur(22px) saturate(180%)",
-    WebkitBackdropFilter: "blur(22px) saturate(180%)",
-    borderRadius: 18,
-    border: "1px solid rgba(148,163,184,0.22)",
-    boxShadow: "0 1px 0 rgba(255,255,255,0.08) inset, 0 20px 40px -22px rgba(2,6,23,.6), 0 1px 3px rgba(15,23,42,.5)",
+    background:
+      "radial-gradient(120% 80% at 0% 0%, rgba(124,58,237,0.22) 0%, rgba(17,24,39,0) 55%), " +
+      "radial-gradient(100% 70% at 100% 100%, rgba(99,102,241,0.18) 0%, rgba(15,23,42,0) 60%), " +
+      "linear-gradient(160deg, rgba(30,27,75,0.78) 0%, rgba(15,23,42,0.82) 55%, rgba(17,24,39,0.85) 100%)",
+    backdropFilter: "blur(26px) saturate(190%)",
+    WebkitBackdropFilter: "blur(26px) saturate(190%)",
+    borderRadius: 20,
+    border: "1px solid rgba(167,139,250,0.28)",
+    boxShadow:
+      "0 1px 0 rgba(255,255,255,0.12) inset, " +
+      "0 24px 60px -28px rgba(124,58,237,.45), " +
+      "0 12px 28px -16px rgba(2,6,23,.7), " +
+      "0 0 0 1px rgba(255,255,255,0.04)",
     padding: narrow ? 18 : 22,
     marginBottom: 18,
     color: "#e2e8f0",
     position: "relative",
     zIndex: 2,
+    overflow: "hidden",
   }
   const wizardIcons = {
     veredicto: Mic,
@@ -10528,13 +10536,13 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
 
         {(wizardFase === "registro" || wizardFase === "resultado") && <div key={`wiz-foto-${wizardFase}`} className="erp-fadein" style={medCardDark}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
-            <div style={{
-              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
-              background:"linear-gradient(135deg, rgba(167,139,250,.25), rgba(99,102,241,.25))",
-              border:"1px solid rgba(167,139,250,.35)",
-              color:"#c4b5fd",
+            <div className="erp-icon-badge" style={{
+              width:42, height:42, borderRadius:13, display:"flex", alignItems:"center", justifyContent:"center",
+              background:"linear-gradient(135deg, rgba(167,139,250,.35), rgba(99,102,241,.30))",
+              border:"1px solid rgba(167,139,250,.55)",
+              color:"#e9d5ff",
             }}>
-              <Camera size={18} strokeWidth={2.4}/>
+              <Camera size={20} strokeWidth={2.4}/>
             </div>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontSize:10, fontWeight:800, color:"#a78bfa", letterSpacing:"0.08em", textTransform:"uppercase" }}>
@@ -10640,12 +10648,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               </>
             )}
             {!camaraEncendida && !facePreview && (
-              <div style={{
-                position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center",
-                flexDirection:"column", gap:8, color:"#64748b", fontSize:13, padding:16, textAlign:"center",
-              }}>
-                <ScanLine size={36} strokeWidth={1.5} />
-                Vista previa de cámara
+              <div className="erp-cam-empty">
+                <div className="erp-cam-icon">
+                  <ScanLine size={28} strokeWidth={1.8} />
+                </div>
+                <div>Vista previa de cámara</div>
+                <div className="erp-cam-hint">Tocá «Abrir cámara» para empezar</div>
               </div>
             )}
             {facePreview && !camaraEncendida && (
@@ -10726,15 +10734,15 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           {faceError && <div style={{ fontSize:12, color:"#fca5a5", marginBottom:10 }}>{faceError}</div>}
           <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
             {!camaraEncendida ? (
-              <Btn type="button" onClick={abrirCamara} style={{ minHeight:44, background:"#7c3aed", border:"none", width: narrow ? "100%" : "auto", justifyContent:"center" }}>
+              <Btn className="erp-glass-btn" type="button" onClick={abrirCamara} style={{ minHeight:44, background:"linear-gradient(135deg,#a855f7,#7c3aed)", border:"none", width: narrow ? "100%" : "auto", justifyContent:"center", boxShadow:"0 10px 24px -10px rgba(124,58,237,.7), 0 1px 0 rgba(255,255,255,.2) inset" }}>
                 <Camera size={16} /> Abrir cámara
               </Btn>
             ) : (
               <>
                 {(!usarTripleSesionMedica || !tripleVideoEnPantallaCompleta) && (
                   <>
-                    <Btn type="button" variant="outline" onClick={detenerCamara} style={{ borderColor:"rgba(255,255,255,.4)", color:"#e2e8f0", minHeight:44, width: narrow ? "100%" : "auto", justifyContent:"center" }}>Cerrar cámara</Btn>
-                    <Btn type="button" onClick={capturarFotogramaYAnalizar} disabled={faceAnalyzing || guardandoTripleFicha} style={{ minHeight:44, background:"linear-gradient(135deg,#7c3aed,#6366f1)", border:"none", width: narrow ? "100%" : "auto", justifyContent:"center" }}>
+                    <Btn className="erp-glass-btn" type="button" variant="outline" onClick={detenerCamara} style={{ background:"rgba(255,255,255,.06)", borderColor:"rgba(255,255,255,.4)", color:"#e2e8f0", minHeight:44, width: narrow ? "100%" : "auto", justifyContent:"center" }}>Cerrar cámara</Btn>
+                    <Btn className="erp-glass-btn" type="button" onClick={capturarFotogramaYAnalizar} disabled={faceAnalyzing || guardandoTripleFicha} style={{ minHeight:44, background:"linear-gradient(135deg,#a855f7,#6366f1)", border:"none", width: narrow ? "100%" : "auto", justifyContent:"center", boxShadow:"0 10px 24px -10px rgba(124,58,237,.7)" }}>
                       <ScanLine size={16} />{" "}
                       {usarTripleSesionMedica
                         ? ["Capturar frente (1/3)", "Capturar perfil derecho (2/3)", "Capturar perfil izquierdo (3/3)"][faceShotIndex] ?? "Capturar"
@@ -10745,11 +10753,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               </>
             )}
             <Btn
+              className="erp-glass-btn"
               type="button"
               variant="outline"
               onClick={() => fotoInputRef.current?.click()}
               disabled={faceAnalyzing}
-              style={{ borderColor:"rgba(255,255,255,.35)", color:"#e2e8f0", minHeight:44, width: narrow ? "100%" : "auto", justifyContent:"center" }}
+              style={{ background:"rgba(255,255,255,.06)", borderColor:"rgba(255,255,255,.35)", color:"#e2e8f0", minHeight:44, width: narrow ? "100%" : "auto", justifyContent:"center" }}
             >
               Elegir foto del rostro
             </Btn>
@@ -10803,27 +10812,30 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           )}
 
           <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid rgba(255,255,255,.12)" }}>
-            <div style={{ fontSize:11, fontWeight:700, color:"#94a3b8", marginBottom:8 }}>Texto en imagen (OCR) y atributos faciales (DeepFace, local)</div>
+            <div style={{ fontSize:11, fontWeight:800, color:"#a78bfa", marginBottom:8, letterSpacing:"0.06em", textTransform:"uppercase" }}>Texto en imagen (OCR) · atributos faciales (DeepFace)</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
               <Btn
+                className="erp-glass-btn"
                 type="button"
                 variant="outline"
                 onClick={runFaceOcr}
                 disabled={faceOcrLoading || faceDfLoading || (!camaraEncendida && !facePreview)}
-                style={{ borderColor:"rgba(167,139,250,.45)", color:"#e9d5ff", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
+                style={{ background:"linear-gradient(135deg, rgba(167,139,250,.18), rgba(99,102,241,.10))", borderColor:"rgba(167,139,250,.55)", color:"#e9d5ff", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
               >
                 {faceOcrLoading ? <Loader2 size={16} className="erp-spin" /> : <FileText size={16} />} OCR (OpenAI)
               </Btn>
               <Btn
+                className="erp-glass-btn"
                 type="button"
                 variant="outline"
                 onClick={runFaceDeepface}
                 disabled={faceOcrLoading || faceDfLoading || (!camaraEncendida && !facePreview)}
-                style={{ borderColor:"rgba(52,211,153,.45)", color:"#a7f3d0", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
+                style={{ background:"linear-gradient(135deg, rgba(52,211,153,.18), rgba(16,185,129,.10))", borderColor:"rgba(52,211,153,.55)", color:"#a7f3d0", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
               >
                 {faceDfLoading ? <Loader2 size={16} className="erp-spin" /> : <ScanLine size={16} />} DeepFace (Python)
               </Btn>
               <Btn
+                className="erp-glass-btn"
                 type="button"
                 variant="outline"
                 onClick={() => {
@@ -10833,11 +10845,15 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 }}
                 disabled={!camaraEncendida}
                 style={{
+                  background: faceDfLiveEnabled
+                    ? "linear-gradient(135deg, rgba(16,185,129,.30), rgba(34,197,94,.18))"
+                    : "linear-gradient(135deg, rgba(148,163,184,.16), rgba(100,116,139,.10))",
                   borderColor: faceDfLiveEnabled ? "rgba(16,185,129,.75)" : "rgba(148,163,184,.45)",
                   color: faceDfLiveEnabled ? "#6ee7b7" : "#cbd5e1",
                   minHeight:42,
                   flex: narrow ? "1 1 100%" : "0 1 auto",
                   justifyContent:"center",
+                  boxShadow: faceDfLiveEnabled ? "0 0 18px -4px rgba(16,185,129,.55)" : undefined,
                 }}
               >
                 {faceDfLiveEnabled ? "Detener DeepFace en vivo" : "DeepFace en vivo"}
