@@ -8636,24 +8636,19 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       const ok = await guardarTripleEnFichaPaciente(tipoFase)
       if (!ok) return
       if (tipoFase === "antes") {
+        // No avanzamos automáticamente al paso "Resultado": el médico decide
+        // cuándo continuar tocando «Continuar a resultado».
         const frontUrlAntes = faceTripleRef.current.front
-        setFotoSesionFase("despues")
-        setFaceShotIndex(0)
-        faceTripleRef.current = { front: null, profileLeft: null, profileRight: null }
-        setFaceTripleShot({ front: null, profileLeft: null, profileRight: null })
-        setFaceResult(null)
+        setFotoFichaGuardada(true)
         setFaceError("")
         setAnnotActive(false)
         setFaceLandmarks(null)
         annotHistory.current = []
-        // No mostrar la foto de "antes" en el paso Resultado: el panel queda libre para las 3 capturas "después".
-        setFacePreview(null)
         if (frontUrlAntes) {
+          setFacePreview(frontUrlAntes)
           void analizarRostroConIA(frontUrlAntes)
           void runMediaPipeOnStillPreview(frontUrlAntes)
         }
-        setWizardFase("resultado")
-        setModalGuiaDespuesOpen(true)
         return
       }
       setDespuesTripleCompleto(true)
@@ -10575,6 +10570,33 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               {despuesTripleCompleto && " · Después completo"}
             </div>
           )}
+          {wizardFase === "registro"
+            && usarTripleSesionMedica
+            && fotoSesionFase === "antes"
+            && faceTripleShot.front
+            && faceTripleShot.profileRight
+            && faceTripleShot.profileLeft
+            && (
+              <div style={{
+                marginBottom:12,
+                padding:"10px 12px",
+                borderRadius:12,
+                background:"linear-gradient(135deg, rgba(16,185,129,.18), rgba(34,197,94,.10))",
+                border:"1px solid rgba(16,185,129,.45)",
+                display:"flex",
+                alignItems:"center",
+                gap:10,
+                color:"#a7f3d0",
+                fontSize:13,
+                fontWeight:700,
+                lineHeight:1.4,
+              }}>
+                <CheckCircle2 size={18} style={{ flexShrink:0, color:"#34d399" }}/>
+                <span>
+                  ¡Las 3 fotos de <strong style={{ color:"#d1fae5" }}>antes</strong> ya están guardadas en la ficha! Cuando quieras, tocá <strong style={{ color:"#d1fae5" }}>«Continuar a resultado»</strong>.
+                </span>
+              </div>
+            )}
           {wizardFase === "resultado" && usarTripleSesionMedica && despuesTripleCompleto && (
             <div style={{ marginBottom:12 }}>
               <Btn
@@ -11006,7 +11028,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 <Btn
                   type="button"
                   onClick={() => {
-                    setWizardFase("resultado")
                     if (usarTripleSesionMedica) {
                       setFotoSesionFase("despues")
                       if (!despuesTripleCompleto) {
@@ -11015,8 +11036,14 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                         setFaceTripleShot({ front: null, profileLeft: null, profileRight: null })
                         setFacePreview(null)
                         setFaceResult(null)
+                        setFaceError("")
+                        setAnnotActive(false)
+                        setFaceLandmarks(null)
+                        annotHistory.current = []
+                        setModalGuiaDespuesOpen(true)
                       }
                     }
+                    setWizardFase("resultado")
                   }}
                   style={{ minHeight:44, background:"linear-gradient(135deg,#7c3aed,#6366f1)", border:"none", flex:1, justifyContent:"center" }}
                 >
