@@ -1,16 +1,17 @@
+// Copia de vite.config.js (solo los plugins de middleware) usable como módulo Node
+// independiente. Se consume desde backend-node/server.js (Express).
+// IMPORTANTE: si agregás o cambiás un middleware, acordate de mantener también
+// aplicacion-web/vite.config.js sincronizado para el entorno de desarrollo.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
-import { defineConfig, loadEnv } from 'vite'
-import react from '@vitejs/plugin-react'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 import { createClient } from '@supabase/supabase-js'
 
 const __viteDirname = path.dirname(fileURLToPath(import.meta.url))
 const DEEPFACE_BRIDGE_SCRIPT = path.resolve(__viteDirname, '../face-proportion-overlay/deepface_bridge.py')
 
 /** PostgREST cuando falta la columna en la BD remota (migración no aplicada). */
-function mapSupabaseSchemaError(msg) {
+export function mapSupabaseSchemaError(msg) {
   const s = String(msg || '')
   if (s.includes('auth_user_id') && (s.includes('schema cache') || s.includes('does not exist'))) {
     return (
@@ -29,7 +30,7 @@ function mapSupabaseSchemaError(msg) {
 }
 
 /** Estado compartido en memoria: sincroniza móvil ↔ PC en la misma red (solo dev / vite preview). */
-function erpStateSyncPlugin() {
+export function erpStateSyncPlugin() {
   let state = null
   const mount = (server) => {
     server.middlewares.use('/api/erp-state', (req, res, next) => {
@@ -142,7 +143,7 @@ ${ctx ? `Contexto opcional (protocolo de la sesión): ${ctx}` : ""}`
 }
 
 /** Proxy API de IA: la clave no sale al navegador y se evita CORS. */
-function openaiProxiesPlugin(openaiKey) {
+export function openaiProxiesPlugin(openaiKey) {
   const mount = (server) => {
     server.middlewares.use('/api/openai/resultado-sesion', (req, res, next) => {
       if (req.method !== "POST") return next()
@@ -692,7 +693,7 @@ Sé lo más preciso posible con las coordenadas.`
 
 /** DeepFace vía Python (face-proportion-overlay/deepface_bridge.py)
  *  o vía servicio HTTP remoto (Render) si se define DEEPFACE_REMOTE_URL. */
-function deepfaceBridgePlugin(opts = {}) {
+export function deepfaceBridgePlugin(opts = {}) {
   const python = process.env.PYTHON || 'python3'
   const requestTimeoutMs = 60000
 
@@ -1041,7 +1042,7 @@ function deepfaceBridgePlugin(opts = {}) {
  * Combina DeepFace (local) + OpenAI Vision → análisis clínico-estético.
  * Requiere deepfacePlugin (para reusar su worker Python) y la clave OpenAI.
  */
-function faceAnalysisFullPlugin(openaiKey, deepfacePlugin) {
+export function faceAnalysisFullPlugin(openaiKey, deepfacePlugin) {
   const buildSystemPrompt = () => (
     `Eres asistente clínico-estético para una clínica médico-estética (España). Análisis asistido por IA de una fotografía de rostro.
 Recibes una imagen del paciente y datos objetivos obtenidos con DeepFace (edad estimada, emoción, etc). Devuelve SOLO un JSON válido con esta forma exacta:
@@ -1181,7 +1182,7 @@ Reglas:
 }
 
 /** Solo gerente: crea usuario en Auth + fila en empleados (requiere SUPABASE_SERVICE_ROLE_KEY en .env.local). */
-function adminCreateStaffPlugin(supabaseUrl, serviceRoleKey) {
+export function adminCreateStaffPlugin(supabaseUrl, serviceRoleKey) {
   const mount = (server) => {
     server.middlewares.use('/api/admin/create-staff', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -1306,7 +1307,7 @@ function adminCreateStaffPlugin(supabaseUrl, serviceRoleKey) {
 }
 
 /** Solo gerente: crea clínica (sucursal o franquicia) */
-function adminCreateClinicPlugin(supabaseUrl, serviceRoleKey) {
+export function adminCreateClinicPlugin(supabaseUrl, serviceRoleKey) {
   const mount = (server) => {
     server.middlewares.use('/api/admin/create-clinic', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -1399,7 +1400,7 @@ function adminCreateClinicPlugin(supabaseUrl, serviceRoleKey) {
 }
 
 /** Primer gerente: solo si aún no hay ninguno en empleados. Opcional GERENTE_SIGNUP_SECRET en .env.local */
-function bootstrapGerentePlugin(supabaseUrl, serviceRoleKey, signupSecret) {
+export function bootstrapGerentePlugin(supabaseUrl, serviceRoleKey, signupSecret) {
   const mount = (server) => {
     server.middlewares.use('/api/admin/bootstrap-gerente', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -1500,7 +1501,7 @@ function bootstrapGerentePlugin(supabaseUrl, serviceRoleKey, signupSecret) {
   }
 }
 
-function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
+export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
   const mount = (server) => {
     server.middlewares.use('/api/erp', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -2422,7 +2423,7 @@ function parseDataUrlForUpload(dataUrl) {
   return { mime, b64 }
 }
 
-function mediaUploadPlugin(supabaseUrl, serviceRoleKey) {
+export function mediaUploadPlugin(supabaseUrl, serviceRoleKey) {
   const mount = (server) => {
     server.middlewares.use('/api/admin/upload-image', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -2565,44 +2566,5 @@ function mediaUploadPlugin(supabaseUrl, serviceRoleKey) {
   }
 }
 
-// https://vite.dev/config/
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  const openaiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
-  const supabaseUrl = env.VITE_SUPABASE_URL || ''
-  const supabaseServiceRole = env.SUPABASE_SERVICE_ROLE_KEY || ''
-  const gerenteSignupSecret = env.GERENTE_SIGNUP_SECRET || ''
-  const deepfaceRemoteUrl = env.DEEPFACE_REMOTE_URL || ''
-  const deepfaceRemoteToken = env.DEEPFACE_REMOTE_TOKEN || ''
-  /** Mic/cámara por IP en móvil: HTTPS. Usamos @vitejs/plugin-basic-ssl (cert propio) en lugar de `https: true` solo, que a veces falla en Chrome macOS. */
-  const devHttps = env.VITE_DEV_HTTPS === 'true' || env.VITE_DEV_HTTPS === '1'
-
-  return {
-    plugins: [
-      react(),
-      ...(devHttps ? [basicSsl()] : []),
-      erpStateSyncPlugin(),
-      openaiProxiesPlugin(openaiKey),
-      ...(function () {
-        const dfPlugin = deepfaceBridgePlugin({
-          remoteUrl: deepfaceRemoteUrl,
-          remoteToken: deepfaceRemoteToken,
-        })
-        return [dfPlugin, faceAnalysisFullPlugin(openaiKey, dfPlugin)]
-      })(),
-      erpOperationsPlugin(supabaseUrl, supabaseServiceRole),
-      mediaUploadPlugin(supabaseUrl, supabaseServiceRole),
-      adminCreateStaffPlugin(supabaseUrl, supabaseServiceRole),
-      adminCreateClinicPlugin(supabaseUrl, supabaseServiceRole),
-      bootstrapGerentePlugin(supabaseUrl, supabaseServiceRole, gerenteSignupSecret),
-    ],
-    server: {
-      host: true,
-      port: 5173,
-    },
-    preview: {
-      host: true,
-      port: 4173,
-    },
-  }
-})
+// Fin del módulo: `defineConfig` de Vite se quita aquí porque este archivo
+// corre como servidor Node standalone. Ver ./server.js para el wiring.

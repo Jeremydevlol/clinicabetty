@@ -33,6 +33,78 @@ import {
 } from "./lib/faceProportionOverlay.js"
 // ─── CONSTANTS & HELPERS ─────────────────────────────────────
 const TODAY = new Date().toISOString().split("T")[0]
+
+/**
+ * DeepFace endpoints.
+ *
+ * - En dev local (npm run dev) usamos los middlewares de Vite: `/api/deepface*`.
+ * - En producción (Vercel) no existen esos middlewares. Si VITE_DEEPFACE_URL está
+ *   definida (p. ej. https://clinicabetty.onrender.com), el frontend llama directo
+ *   a ese servicio HTTP.
+ *
+ * El análisis clínico-estético combinado (DeepFace + OpenAI Vision) solo funciona
+ * con el middleware local. En producción se devuelve solo el resultado de DeepFace
+ * y `clinicoError` avisa que se necesita un backend con la key de OpenAI.
+ */
+const FACE_REMOTE_URL = String(import.meta.env?.VITE_DEEPFACE_URL || "").replace(/\/+$/, "")
+const FACE_REMOTE_TOKEN = String(import.meta.env?.VITE_DEEPFACE_TOKEN || "")
+const FACE_ANALYZE_URL = FACE_REMOTE_URL ? `${FACE_REMOTE_URL}/analyze` : "/api/deepface"
+const FACE_STATUS_URL = FACE_REMOTE_URL ? `${FACE_REMOTE_URL}/status` : "/api/deepface/status"
+
+/** Headers comunes para el servicio DeepFace remoto. */
+function faceRemoteHeaders() {
+  const h = { "Content-Type": "application/json" }
+  if (FACE_REMOTE_TOKEN) h["Authorization"] = `Bearer ${FACE_REMOTE_TOKEN}`
+  return h
+}
+
+/**
+ * Llama al análisis facial "full" (DeepFace + comentario clínico IA).
+ * En dev va al middleware /api/face-analysis/full; en prod hace fallback a
+ * DeepFace-only contra el servicio remoto.
+ *
+ * Devuelve { ok, face_found, deepface, clinico, clinicoError, error? }.
+ */
+async function callFaceAnalysisFull(imageB64, opts = {}) {
+  const includeAi = opts.includeAi !== false
+  if (!FACE_REMOTE_URL) {
+    try {
+      const r = await fetch("/api/face-analysis/full", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: imageB64, includeAi }),
+      })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j?.ok) {
+        return { ok: false, error: j?.error || `Error ${r.status}`, status: r.status }
+      }
+      return j
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) }
+    }
+  }
+  try {
+    const r = await fetch(`${FACE_REMOTE_URL}/analyze`, {
+      method: "POST",
+      headers: faceRemoteHeaders(),
+      body: JSON.stringify({ image_base64: imageB64 }),
+    })
+    const j = await r.json().catch(() => null)
+    if (!r.ok || !j?.ok) {
+      return { ok: false, error: j?.error || j?.detail || `Error ${r.status}`, status: r.status }
+    }
+    return {
+      ok: true,
+      face_found: j.face_found !== false,
+      deepface: j,
+      clinico: null,
+      clinicoError: "Análisis clínico-estético con IA deshabilitado en producción (falta proxy de OpenAI). DeepFace OK.",
+    }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) }
+  }
+}
+
 /** Importes en EUR (referencia mercado UE; sustituir por vuestra tarifa). */
 const fmt = n => {
   const x = Number(n)
@@ -8111,14 +8183,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       setFaceError("")
     }
     try {
-      const r = await fetch("/api/face-analysis/full", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: b64, includeAi: true }),
-      })
-      const j = await r.json().catch(() => null)
-      if (!r.ok || !j?.ok) {
-        const msg = j?.error || `Error ${r.status}`
+      const j = await callFaceAnalysisFull(b64, { includeAi: true })
+      if (!j?.ok) {
+        const msg = j?.error || "Error de análisis"
         if (!background) setFaceError(msg)
         return null
       }
@@ -8375,9 +8442,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         setFaceDfErr("No hay imagen: abrí la cámara o elegí una foto.")
         return false
       }
-      const r = await fetch("/api/deepface", {
+      const r = await fetch(FACE_ANALYZE_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: faceRemoteHeaders(),
         body: JSON.stringify({ image_base64: b64 }),
       })
       const j = await r.json().catch(() => null)
@@ -8427,7 +8494,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     const poll = async () => {
       if (cancelled) return
       try {
-        const r = await fetch("/api/deepface/status")
+        const r = await fetch(FACE_STATUS_URL)
         if (r.ok) {
           const j = await r.json()
           setFaceDfWorkerStatus({ polling: true, ...j })
