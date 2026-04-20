@@ -10859,6 +10859,26 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 {faceDfLiveEnabled ? "Detener DeepFace en vivo" : "DeepFace en vivo"}
               </Btn>
             </div>
+            {!camaraEncendida && !facePreview && (
+              <div style={{
+                marginTop:10,
+                padding:"10px 12px",
+                borderRadius:10,
+                background:"rgba(167,139,250,.10)",
+                border:"1px dashed rgba(167,139,250,.45)",
+                fontSize:12,
+                color:"#c4b5fd",
+                lineHeight:1.45,
+                display:"flex",
+                alignItems:"center",
+                gap:8,
+              }}>
+                <Camera size={14} style={{ flexShrink:0 }} />
+                <span>
+                  Activá <strong style={{ color:"#e9d5ff" }}>«Abrir cámara»</strong> o <strong style={{ color:"#e9d5ff" }}>«Elegir foto del rostro»</strong> para habilitar el análisis.
+                </span>
+              </div>
+            )}
             {camaraEncendida && (
               <div style={{ fontSize:11, color:"#94a3b8", marginTop:8, display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
                 <span>
