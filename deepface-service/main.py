@@ -38,6 +38,10 @@ log = logging.getLogger("deepface-service")
 
 API_TOKEN = os.environ.get("API_TOKEN", "").strip()
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*").strip() or "*"
+# Por defecto NO precargamos los modelos al arrancar: en planes chicos (≤512MB)
+# la descarga+inicialización de TensorFlow/DeepFace puede OOM-killear el contenedor.
+# Se precarga sólo si WARMUP_ON_START=1.
+WARMUP_ON_START = os.environ.get("WARMUP_ON_START", "0").strip() in ("1", "true", "yes")
 
 # ─── Carga perezosa de modelos pesados ──────────────────────────────
 _DeepFace = None
@@ -186,9 +190,16 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _on_startup() -> None:
-    log.info("DeepFace service arrancando · API_TOKEN=%s · ALLOWED_ORIGIN=%s",
-             "set" if API_TOKEN else "none", ALLOWED_ORIGIN)
-    _warmup()
+    log.info(
+        "DeepFace service arrancando · API_TOKEN=%s · ALLOWED_ORIGIN=%s · WARMUP_ON_START=%s",
+        "set" if API_TOKEN else "none",
+        ALLOWED_ORIGIN,
+        "1" if WARMUP_ON_START else "0",
+    )
+    if WARMUP_ON_START:
+        _warmup()
+    else:
+        log.info("Warmup deshabilitado al arrancar (se hará lazy en /analyze).")
 
 
 def _check_auth(authorization: Optional[str]) -> None:
