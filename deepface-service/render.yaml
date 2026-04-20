@@ -1,0 +1,24 @@
+# Blueprint para Render — DeepFace HTTP Service
+# Subir el repo y crear un nuevo "Web Service" eligiendo Docker como Runtime.
+# Si preferís el modo Blueprint: New + → "Blueprint" y apuntá a este archivo.
+
+services:
+  - type: web
+    name: deepface-service
+    runtime: docker
+    plan: starter            # subí a "standard" si se queda corto de RAM
+    region: frankfurt        # cambiá por oregon/singapore/etc. si hace falta
+    rootDir: deepface-service
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8000
+      # Si querés proteger el endpoint con un Bearer token, definí API_TOKEN
+      # como secret en el panel de Render. Si no lo seteás, queda público.
+      - key: API_TOKEN
+        sync: false
+      # Restringí CORS al dominio del frontend en producción:
+      - key: ALLOWED_ORIGIN
+        value: "*"

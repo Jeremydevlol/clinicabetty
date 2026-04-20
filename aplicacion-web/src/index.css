@@ -1,9 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root {
   --text: #475569;
   --text-h: #0f172a;
-  --bg: #fafafb;
+  --bg: #F4F6FB;
   --border: rgba(15, 23, 42, 0.08);
   --code-bg: #f1f5f9;
   --accent: #6366f1;
@@ -21,7 +21,7 @@
 }
 
 /* ─────────────────────────────────────────────────────────
-   GLOBAL AURORA / MESH BACKGROUND (SOLO CLARO)
+   LIQUID GLASS — FONDO GLOBAL CON GRADIENTE SUAVE
 ───────────────────────────────────────────────────────── */
 body {
   margin: 0;
@@ -32,11 +32,8 @@ body {
   letter-spacing: -0.01em;
   color: var(--text);
   background-color: var(--bg);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.06) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(236, 72, 153, 0.04) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.04) 0px, transparent 50%),
-    radial-gradient(at 0% 100%, rgba(245, 158, 11, 0.04) 0px, transparent 50%);
+  background-image:
+    linear-gradient(135deg, #EEF2FF 0%, #F4F6FB 45%, #FDF4FF 100%);
   background-attachment: fixed;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -45,25 +42,126 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────
-   SUPERFICIES ERP (opacas; sin cristal para legibilidad en tablet)
+   LIQUID GLASS — ORBES ANIMADOS (fondo decorativo global)
+   Se inyectan vía ::before/::after en #root para no ensuciar el JSX.
 ───────────────────────────────────────────────────────── */
-.erp-modal-backdrop,
-.erp-nav-backdrop {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-.erp-modal-surface {
-  background: #ffffff !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-.erp-app-sidebar {
-  background: #ffffff !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+#root {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  text-align: left;
+  min-height: 100svh;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  position: relative;
+  isolation: isolate;
 }
 
-/* Interactive elements subtle micro-animations */
+/* Contenedor global de orbes (lo usa App.jsx con clase .erp-orbs) */
+.erp-orbs {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  mask-image: radial-gradient(ellipse 90% 90% at 50% 40%, #000 0%, rgba(0,0,0,0.8) 55%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0) 100%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 90% at 50% 40%, #000 0%, rgba(0,0,0,0.8) 55%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0) 100%);
+}
+.erp-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.55;
+  will-change: transform, opacity;
+}
+.erp-orb-1 { top: -8%;  left: 12%; width: 440px; height: 440px; background: #6366F1; animation: erp-orb-float-a 14s ease-in-out infinite; }
+.erp-orb-2 { top: 30%;  right: 6%; width: 380px; height: 380px; background: #A855F7; animation: erp-orb-float-b 18s ease-in-out infinite 1.5s; opacity: 0.45; }
+.erp-orb-3 { bottom: -10%; left: 35%; width: 420px; height: 420px; background: #38BDF8; animation: erp-orb-float-c 20s ease-in-out infinite 0.8s; opacity: 0.38; }
+.erp-orb-4 { top: 55%;  left: -4%;  width: 320px; height: 320px; background: #F472B6; animation: erp-orb-float-d 16s ease-in-out infinite 2s; opacity: 0.35; }
+
+@keyframes erp-orb-float-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(40px, 30px) scale(1.08); }
+}
+@keyframes erp-orb-float-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-50px, 40px) scale(1.1); }
+}
+@keyframes erp-orb-float-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(30px, -35px) scale(0.94); }
+}
+@keyframes erp-orb-float-d {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(50px, -20px) scale(1.05); }
+}
+
+/* ─────────────────────────────────────────────────────────
+   LIQUID GLASS — CLASE DE SUPERFICIE REUTILIZABLE
+───────────────────────────────────────────────────────── */
+.glass-surface {
+  background: linear-gradient(135deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.58) 100%);
+  backdrop-filter: blur(22px) saturate(200%);
+  -webkit-backdrop-filter: blur(22px) saturate(200%);
+  border: 1px solid rgba(255,255,255,0.45);
+  box-shadow:
+    0 1px 2px rgba(255,255,255,0.8) inset,
+    0 -1px 1px rgba(15,23,42,0.04) inset,
+    0 12px 32px -16px rgba(15,23,42,0.18),
+    0 1px 3px rgba(15,23,42,0.04);
+}
+.glass-surface-soft {
+  background: linear-gradient(135deg, rgba(255,255,255,0.55) 0%, rgba(248,250,252,0.35) 100%);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.35);
+}
+
+/* ─────────────────────────────────────────────────────────
+   OVERRIDES — SIDEBAR / MODAL CON LIQUID GLASS (desktop)
+   Se mantiene fallback sólido para tablet / móvil donde la
+   legibilidad manda.
+───────────────────────────────────────────────────────── */
+.erp-app-sidebar {
+  background: linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(248,250,252,0.18) 100%) !important;
+  backdrop-filter: blur(22px) saturate(220%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(220%) !important;
+  border-right: none !important;
+  box-shadow: 1px 0 0 rgba(226,232,240,0.5) !important;
+}
+.erp-modal-backdrop {
+  backdrop-filter: blur(10px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(140%) !important;
+  background: rgba(15,23,42,0.45) !important;
+}
+.erp-modal-surface {
+  background: linear-gradient(135deg, rgba(255,255,255,0.94) 0%, rgba(255,255,255,0.86) 100%) !important;
+  backdrop-filter: blur(22px) saturate(200%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(200%) !important;
+  border: 1px solid rgba(255,255,255,0.6) !important;
+}
+
+/* Tablet / móvil: fondo opaco (legibilidad > estética) */
+@media (max-width: 900px) {
+  .erp-modal-surface {
+    background: #FFFFFF !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .erp-app-sidebar {
+    background: #FFFFFF !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-right: 1px solid #E2E8F0 !important;
+  }
+  .erp-orbs { display: none; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   INTERACTIVE ELEMENTS
+───────────────────────────────────────────────────────── */
 button, a {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
@@ -74,12 +172,6 @@ button:active {
 
 button:hover {
   filter: brightness(1.05);
-}
-
-/* Sombras suaves salvo modales (definen su propia sombra) */
-[style*="boxShadow"]:not(.erp-modal-surface),
-[style*="box-shadow"]:not(.erp-modal-surface) {
-  box-shadow: var(--shadow-sm) !important;
 }
 
 /* Improve Inputs */
@@ -131,6 +223,12 @@ input:focus, select:focus, textarea:focus {
   animation: erp-analyzing-pulse 2.2s ease-in-out infinite;
 }
 
+@keyframes erp-fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.erp-fadein { animation: erp-fadein 0.35s ease both; }
+
 @media (max-width: 1024px) {
   :root { font-size: 16px; }
   h1 { font-size: 36px !important; margin: 20px 0 !important; }
@@ -138,7 +236,6 @@ input:focus, select:focus, textarea:focus {
   #root table { font-size: 13px !important; }
 }
 
-/* Tablet / iPad: espaciado y legibilidad sin cristal */
 @media (min-width: 641px) and (max-width: 1200px) {
   .erp-modal-surface .erp-modal-body {
     -webkit-overflow-scrolling: touch;
@@ -162,18 +259,6 @@ input:focus, select:focus, textarea:focus {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-}
-
-#root {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  text-align: left;
-  min-height: 100svh;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
 }
 
 #root button, #root [role='button'] { touch-action: manipulation; }
@@ -203,11 +288,6 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
   border: 1px solid var(--border);
-}
-
-/* Sidebar: borde coherente (fondo opaco vía .erp-app-sidebar + tema en App) */
-.erp-app-sidebar {
-  border-right: 1px solid #e2e8f0 !important;
 }
 
 /* Table Row Hovers Overlay */

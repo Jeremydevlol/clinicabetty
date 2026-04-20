@@ -887,20 +887,31 @@ function makeData() {
 }
 
 const C = {
-  sidebar:      "#FFFFFF",
-  sidebarBdr:   "#E2E8F0",
-  violet:       "#6366F1", // Indigo 500
+  // ── Liquid glass design system (indigo base + glass alphas) ──
+  sidebar:      "linear-gradient(180deg, rgba(255,255,255,0.32) 0%, rgba(248,250,252,0.18) 100%)",
+  sidebarBdr:   "rgba(226,232,240,0)",      // sin línea dura; el sidebar usa backdrop-filter
+  violet:       "#6366F1", // Indigo 500 (se mantiene como acento principal)
   violetLight:  "#EEF2FF",
+  violetDark:   "#4338CA",
   pink:         "#F43F5E", // Rose 500
   success:      "#10B981", // Emerald 500
   warning:      "#F59E0B", // Amber 500
   danger:       "#EF4444", // Red 500
   bg:           "#F1F5F9",
-  card:         "#FFFFFF",
+  card:         "rgba(255,255,255,0.72)",   // card translúcida (con backdrop-filter)
+  cardSolid:    "#FFFFFF",                  // para casos donde necesitamos opacidad (inputs, dropdowns)
   text:         "#0F172A",
   muted:        "#64748B",
-  border:       "#E2E8F0",
+  border:       "rgba(226,232,240,0.6)",    // borde semi-transparente
+  borderSolid:  "#E2E8F0",
   subtle:       "#F1F5F9",
+  // Glass tokens
+  glassBlur:    "blur(22px) saturate(200%)",
+  glassShadow:  "0 1px 2px rgba(255,255,255,0.8) inset, 0 -1px 1px rgba(15,23,42,0.04) inset, 0 12px 32px -16px rgba(15,23,42,0.18), 0 1px 3px rgba(15,23,42,0.04)",
+  glassBg:      "linear-gradient(135deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.58) 100%)",
+  glassBgSoft:  "linear-gradient(135deg, rgba(255,255,255,0.52) 0%, rgba(248,250,252,0.32) 100%)",
+  // Gradient hero (para botones primarios, active states)
+  gradient:     "linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #A855F7 100%)",
 }
 
 /** Texto de <code> sobre fondo claro: fuerza contraste aunque el SO use tema oscuro (evita `code{color:var(--text-h)}` en index.css). */
@@ -939,9 +950,15 @@ function Badge({ type, children }) {
   }
   const s = map[type] || map.gray
   return (
-    <span style={{ background:s.bg, color:s.color, border:`1px solid ${s.bdr}`,
-      padding:"2px 9px", borderRadius:99, fontSize:11, fontWeight:600,
-      display:"inline-flex", alignItems:"center", whiteSpace:"nowrap" }}>
+    <span style={{
+      background: `linear-gradient(135deg, ${s.bg} 0%, ${s.bg}D0 100%)`,
+      color: s.color,
+      border: `1px solid ${s.bdr}88`,
+      padding: "3px 10px", borderRadius: 99, fontSize: 11, fontWeight: 600,
+      display: "inline-flex", alignItems: "center", whiteSpace: "nowrap",
+      letterSpacing: "-0.005em",
+      boxShadow: "0 1px 0 rgba(255,255,255,0.4) inset",
+    }}>
       {children}
     </span>
   )
@@ -949,17 +966,46 @@ function Badge({ type, children }) {
 
 function KpiCard({ title, value, sub, trend, up, icon: Icon, accent }) {
   return (
-    <div style={{ background:C.card, borderRadius:16, padding:"18px 20px",
-      boxShadow:"0 1px 3px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04)",
-      display:"flex", flexDirection:"column", gap:12, borderTop:`3px solid ${accent}` }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+    <div style={{
+      position: "relative",
+      background: C.glassBg,
+      backdropFilter: C.glassBlur,
+      WebkitBackdropFilter: C.glassBlur,
+      borderRadius: 18,
+      padding: "18px 20px",
+      border: "1px solid rgba(255,255,255,0.5)",
+      boxShadow: C.glassShadow,
+      display: "flex",
+      flexDirection: "column",
+      gap: 12,
+      overflow: "hidden",
+      transition: "transform .2s, box-shadow .2s",
+    }}>
+      {/* Barra de acento superior (gradient sutil) */}
+      <div aria-hidden style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: 3,
+        background: `linear-gradient(90deg, ${accent} 0%, ${accent}CC 60%, ${accent}66 100%)`,
+        borderRadius: "18px 18px 0 0",
+      }}/>
+      {/* Reflejo glass sutil */}
+      <div aria-hidden style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: "50%",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0) 100%)",
+        pointerEvents: "none",
+      }}/>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", position: "relative" }}>
         <span style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".7px" }}>{title}</span>
-        <div style={{ background:`${accent}18`, padding:8, borderRadius:10 }}>
+        <div style={{
+          background: `linear-gradient(135deg, ${accent}22 0%, ${accent}10 100%)`,
+          padding: 9, borderRadius: 11,
+          border: `1px solid ${accent}22`,
+          boxShadow: `0 4px 12px -4px ${accent}30`,
+        }}>
           <Icon size={17} color={accent} />
         </div>
       </div>
-      <div style={{ fontSize:26, fontWeight:800, color:C.text, lineHeight:1 }}>{value}</div>
-      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+      <div style={{ fontSize:26, fontWeight:800, color:C.text, lineHeight:1, position: "relative" }}>{value}</div>
+      <div style={{ display:"flex", alignItems:"center", gap:8, position: "relative" }}>
         <span style={{ fontSize:12, color:C.muted }}>{sub}</span>
         {trend && (
           <span style={{ fontSize:11, fontWeight:700, color:up?"#10B981":"#EF4444",
@@ -1001,25 +1047,29 @@ function Modal({ open, onClose, title, children, footer }) {
         padding: fullScreen ? 0 : tablet ? 20 : 16,
         WebkitTapHighlightColor: "transparent" }}>
       <div
-        className={fullScreen ? "erp-modal-panel erp-modal-surface" : "erp-modal-surface"}
+        className={fullScreen ? "erp-modal-panel erp-modal-surface erp-fadein" : "erp-modal-surface erp-fadein"}
         style={{
-          background: C.card,
-          borderRadius: fullScreen ? 0 : tablet ? 18 : 20,
+          borderRadius: fullScreen ? 0 : tablet ? 20 : 22,
           padding: fullScreen ? 16 : tablet ? 24 : 28,
           width: fullScreen ? "100%" : "min(560px, calc(100vw - 48px))",
           maxWidth: fullScreen ? "100%" : "min(95vw, 560px)",
           maxHeight: fullScreen ? "100dvh" : tablet ? "min(92dvh, 900px)" : "90vh",
           minHeight: fullScreen ? "100dvh" : undefined,
           overflowY: fullScreen ? "hidden" : "auto",
-          boxShadow: fullScreen ? "none" : "0 24px 64px rgba(15,23,42,0.18), 0 0 0 1px rgba(15,23,42,0.06)",
+          boxShadow: fullScreen ? "none" : "0 32px 80px -20px rgba(15,23,42,0.35), 0 0 0 1px rgba(255,255,255,0.5)",
           display: fullScreen ? "flex" : "block",
           flexDirection: fullScreen ? "column" : undefined,
-          border: fullScreen ? "none" : `1px solid ${C.border}`,
         }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: fullScreen ? 16 : 22, flexShrink:0 }}>
-          <h3 style={{ fontSize: fullScreen ? 17 : 16, fontWeight:700, color:C.text, paddingRight:8 }}>{title}</h3>
-          <button type="button" onClick={onClose} style={{ background:C.subtle, border:"none", borderRadius:8,
-            width: fullScreen || tablet ? 44 : 30, height: fullScreen || tablet ? 44 : 30, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <h3 style={{ fontSize: fullScreen ? 17 : 16, fontWeight:700, color:C.text, paddingRight:8, letterSpacing: "-0.015em" }}>{title}</h3>
+          <button type="button" onClick={onClose} style={{
+            background:"rgba(241,245,249,0.8)",
+            border:"1px solid rgba(226,232,240,0.6)",
+            borderRadius:10,
+            width: fullScreen || tablet ? 44 : 32, height: fullScreen || tablet ? 44 : 32,
+            cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0,
+            color: C.muted,
+          }}>
             <X size={fullScreen || tablet ? 18 : 15} />
           </button>
         </div>
@@ -1052,17 +1102,54 @@ function FG({ label, children, full }) {
 
 function Btn({ children, onClick, variant="primary", sm, disabled, style: styleProp, ...rest }) {
   const v = {
-    primary: { bg:C.violet,  color:"#fff", bdr:"transparent" },
-    outline: { bg:"rgba(255,255,255,0.4)",    color:C.violet, bdr:C.violet },
-    ghost:   { bg:"transparent", color:C.muted, bdr:"transparent" },
-    danger:  { bg:"#FEF2F2", color:"#DC2626", bdr:"#FECACA" },
+    primary: {
+      bg: C.gradient,
+      color: "#fff",
+      bdr: "rgba(255,255,255,0.25)",
+      shadow: "0 1px 0 rgba(255,255,255,0.4) inset, 0 8px 20px -6px rgba(99,102,241,0.55), 0 1px 2px rgba(15,23,42,0.08)",
+    },
+    outline: {
+      bg: "linear-gradient(135deg, rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.55) 100%)",
+      color: C.violet,
+      bdr: `${C.violet}55`,
+      shadow: "0 1px 0 rgba(255,255,255,0.6) inset, 0 4px 12px -4px rgba(99,102,241,0.15)",
+      blur: true,
+    },
+    ghost: {
+      bg: "transparent",
+      color: C.muted,
+      bdr: "transparent",
+      shadow: "none",
+    },
+    danger: {
+      bg: "linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%)",
+      color: "#DC2626",
+      bdr: "#FCA5A588",
+      shadow: "0 1px 0 rgba(255,255,255,0.5) inset, 0 4px 12px -4px rgba(239,68,68,0.15)",
+      blur: true,
+    },
   }[variant] || {}
   return (
-    <button type="button" disabled={disabled} onClick={onClick} style={{ background:v.bg, color:v.color,
-      border:`1.5px solid ${v.bdr}`, borderRadius:9,
-      padding: sm ? "5px 11px" : "8px 18px", fontSize: sm ? 12 : 13,
-      fontWeight:600, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1,
-      display:"inline-flex", alignItems:"center", gap:6, ...styleProp }} {...rest}>
+    <button type="button" disabled={disabled} onClick={onClick} style={{
+      background: v.bg,
+      color: v.color,
+      border: `1.5px solid ${v.bdr}`,
+      borderRadius: 10,
+      padding: sm ? "5px 12px" : "9px 18px",
+      fontSize: sm ? 12 : 13,
+      fontWeight: 600,
+      letterSpacing: "-0.005em",
+      cursor: disabled ? "not-allowed" : "pointer",
+      opacity: disabled ? 0.55 : 1,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      boxShadow: v.shadow,
+      backdropFilter: v.blur ? "blur(10px) saturate(180%)" : undefined,
+      WebkitBackdropFilter: v.blur ? "blur(10px) saturate(180%)" : undefined,
+      transition: "transform .15s, box-shadow .15s, filter .15s",
+      ...styleProp,
+    }} {...rest}>
       {children}
     </button>
   )
@@ -1070,13 +1157,36 @@ function Btn({ children, onClick, variant="primary", sm, disabled, style: styleP
 
 function TabBar({ tabs, active, onChange }) {
   return (
-    <div style={{ display:"flex", gap:3, background:C.subtle, borderRadius:10, padding:4, width:"fit-content", marginBottom:18 }}>
+    <div style={{
+      display: "flex", gap: 3,
+      background: "linear-gradient(135deg, rgba(241,245,249,0.75) 0%, rgba(226,232,240,0.55) 100%)",
+      backdropFilter: "blur(14px) saturate(180%)",
+      WebkitBackdropFilter: "blur(14px) saturate(180%)",
+      borderRadius: 12,
+      padding: 4,
+      border: "1px solid rgba(255,255,255,0.5)",
+      boxShadow: "0 1px 2px rgba(255,255,255,0.6) inset, 0 4px 12px -4px rgba(15,23,42,0.08)",
+      width: "fit-content",
+      marginBottom: 18,
+    }}>
       {tabs.map(t => (
         <button key={t.id} onClick={() => onChange(t.id)} style={{
-          padding:"6px 16px", borderRadius:8, border:"none", fontSize:13, fontWeight:600,
-          cursor:"pointer", background: active===t.id ? C.card : "transparent",
-          color: active===t.id ? C.violet : C.muted,
-          boxShadow: active===t.id ? "0 1px 4px rgba(0,0,0,.08)" : "none" }}>
+          padding: "6px 16px",
+          borderRadius: 9,
+          border: "none",
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: "pointer",
+          background: active === t.id
+            ? "linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.8) 100%)"
+            : "transparent",
+          color: active === t.id ? C.violet : C.muted,
+          boxShadow: active === t.id
+            ? "0 1px 0 rgba(255,255,255,0.7) inset, 0 4px 10px -3px rgba(99,102,241,0.18), 0 1px 2px rgba(15,23,42,0.04)"
+            : "none",
+          transition: "all .2s",
+          letterSpacing: "-0.005em",
+        }}>
           {t.label}
         </button>
       ))}
@@ -4030,25 +4140,42 @@ function Login({ onLogin }) {
   }
 
   const cardStyle = {
-    background: C.card,
+    background: "linear-gradient(135deg, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.62) 100%)",
+    backdropFilter: "blur(24px) saturate(200%)",
+    WebkitBackdropFilter: "blur(24px) saturate(200%)",
+    border: "1px solid rgba(255,255,255,0.55)",
     padding: "max(28px, env(safe-area-inset-left)) max(32px, env(safe-area-inset-right))",
-    borderRadius: 20,
+    borderRadius: 24,
     width: 400,
     maxWidth: "100%",
-    boxShadow: "0 25px 80px rgba(0,0,0,.2)",
+    boxShadow: "0 1px 0 rgba(255,255,255,0.7) inset, 0 32px 80px -20px rgba(15,23,42,0.28), 0 1px 3px rgba(15,23,42,0.06)",
+    position: "relative",
+    zIndex: 2,
   }
 
   return (
     <div style={{ minHeight:"100dvh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
       background:"transparent",
+      position:"relative",
       padding:"max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left))" }}>
+      {/* ── ORBES ANIMADOS DE FONDO ── */}
+      <div className="erp-orbs" aria-hidden>
+        <span className="erp-orb erp-orb-1"/>
+        <span className="erp-orb erp-orb-2"/>
+        <span className="erp-orb erp-orb-3"/>
+        <span className="erp-orb erp-orb-4"/>
+      </div>
       {vista === "login" ? (
       <form onSubmit={submit} style={cardStyle}>
         <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24 }}>
-          <div style={{ width:44, height:44, borderRadius:12, background:`linear-gradient(135deg,${C.violet},${C.pink})`,
-            display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}><Sparkles size={24} color="#fff" strokeWidth={2.5} /></div>
+          <div style={{
+            width:46, height:46, borderRadius:13,
+            background: C.gradient,
+            display:"flex", alignItems:"center", justifyContent:"center", fontSize:22,
+            boxShadow: `0 10px 24px -8px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.45) inset`,
+          }}><Sparkles size={24} color="#fff" strokeWidth={2.5} /></div>
           <div>
-            <div style={{ fontSize:18, fontWeight:800, color:C.text }}>Estética ERP</div>
+            <div style={{ fontSize:18, fontWeight:800, color:C.text, letterSpacing:"-0.02em" }}>Estética ERP</div>
             <div style={{ fontSize:12, color:C.muted }}>Ingresá con tu usuario institucional</div>
           </div>
         </div>
@@ -4060,8 +4187,19 @@ function Login({ onLogin }) {
             <input style={inp} type="password" value={pass} onChange={e=>setPass(e.target.value)} autoComplete="new-password" placeholder="••••••"/>
           </FG>
           {err && <div style={{ fontSize:12, color:C.danger, fontWeight:600 }}>{err}</div>}
-          <button type="submit" disabled={loading} style={{ marginTop:8, background:C.violet, color:"#fff", border:"none", borderRadius:10,
-            padding:"12px 18px", fontSize:14, fontWeight:700, cursor: loading ? "wait" : "pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity: loading ? 0.85 : 1 }}>
+          <button type="submit" disabled={loading} style={{
+            marginTop:8,
+            background: C.gradient,
+            color:"#fff",
+            border:"1px solid rgba(255,255,255,0.25)",
+            borderRadius:12,
+            padding:"12px 18px", fontSize:14, fontWeight:700,
+            letterSpacing:"-0.01em",
+            cursor: loading ? "wait" : "pointer",
+            display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            opacity: loading ? 0.85 : 1,
+            boxShadow: `0 1px 0 rgba(255,255,255,0.35) inset, 0 10px 24px -8px ${C.violet}66`,
+          }}>
             <Lock size={16}/> {loading ? "Entrando…" : "Entrar"}
           </button>
         </div>
@@ -4072,17 +4210,6 @@ function Login({ onLogin }) {
           <code style={codeStyle()}>gerente</code> — contraseña{" "}
           <code style={codeStyle()}>demo</code>
         </p>
-        )}
-        {useSupabaseAuth && (
-        <p style={{ fontSize:11, color:C.muted, marginTop:20, lineHeight:1.5 }}>
-          Tu perfil viene de Supabase Auth y la tabla <code style={codeStyle()}>empleados</code>.
-        </p>
-        )}
-        {useSupabaseAuth && (
-          <button type="button" onClick={() => { setVista("registro"); setErr("") }}
-            style={{ marginTop:16, width:"100%", background:"transparent", border:`1.5px solid ${C.border}`, borderRadius:10, padding:"11px 14px", fontSize:13, fontWeight:600, color:C.violet, cursor:"pointer" }}>
-            Crear cuenta de administrador (gerente)
-          </button>
         )}
       </form>
       ) : (
@@ -7575,6 +7702,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const [faceDfLoading, setFaceDfLoading] = useState(false)
   const [faceDfResult, setFaceDfResult] = useState(null)
   const [faceDfErr, setFaceDfErr] = useState("")
+  const [faceDfLiveEnabled, setFaceDfLiveEnabled] = useState(false)
+  const [faceDfLiveTick, setFaceDfLiveTick] = useState(0)
+  const [faceDfWorkerStatus, setFaceDfWorkerStatus] = useState({ polling: false })
+  const faceDfLiveBusyRef = useRef(false)
+  const faceDfLiveTimerRef = useRef(0)
+  const runFaceDeepfaceRef = useRef(null)
   const [docDictadoTexto, setDocDictadoTexto] = useState("")
   const [docEscuchando, setDocEscuchando] = useState(false)
   const [docGrabando, setDocGrabando] = useState(false)
@@ -7895,6 +8028,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     setCamaraEncendida(false)
     setCamaraFullscreen(false)
     setFaceRearCamera(false)
+    setFaceDfLiveEnabled(false)
     setFaceOverlayLiveMirror(true)
     if (!preserveTriple && usarTripleSesionMedica && faceShotIndex < 3) {
       faceTripleRef.current = { front: null, profileLeft: null, profileRight: null }
@@ -7959,30 +8093,129 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     } catch { /* ignore */ }
   }, [])
 
-  const rnd = (a, b) => Math.floor(a + Math.random() * (b - a))
-
-  const ejecutarAnalisisSimulado = () => {
-    setFaceAnalyzing(true)
-    setFaceResult(null)
-    setFaceError("")
-    window.setTimeout(() => {
-      setFaceResult({
-        simetria: rnd(82, 95),
-        luminosidad: rnd(70, 93),
-        hidratacion: ["alta", "moderada", "baja"][rnd(0, 3)],
-        lineas: [
-          "leves líneas periorbitarias",
-          "surco nasogeniano leve",
-          "líneas de frente finas",
-          "pocas alteraciones marcadas",
-        ][rnd(0, 4)],
-        tono: ["uniforme", "levemente heterogéneo"][rnd(0, 2)],
-        sugerencias: "Valorar plan según criterio clínico; seguimiento fotográfico recomendado.",
-        disclaimer: "Simulación ilustrativa — no reemplaza evaluación clínica.",
+  /**
+   * Análisis combinado real: DeepFace (local) + OpenAI Vision (clínico-estético).
+   * Llama /api/face-analysis/full y guarda el JSON crudo en faceResult.
+   */
+  const ejecutarAnalisisReal = useCallback(async (opts = {}) => {
+    const background = opts.background === true
+    const b64 = await grabFaceFrameBase64Async(
+      background ? { maxWidth: 720, quality: 0.82 } : { maxWidth: 1200, quality: 0.9 },
+    )
+    if (!b64) {
+      if (!background) setFaceError("No hay imagen: abrí la cámara o elegí una foto.")
+      return null
+    }
+    if (!background) {
+      setFaceAnalyzing(true)
+      setFaceError("")
+    }
+    try {
+      const r = await fetch("/api/face-analysis/full", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: b64, includeAi: true }),
       })
-      setFaceAnalyzing(false)
-    }, 2000)
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j?.ok) {
+        const msg = j?.error || `Error ${r.status}`
+        if (!background) setFaceError(msg)
+        return null
+      }
+      if (j.face_found === false) {
+        if (!background) setFaceError("No se detectó rostro en la imagen.")
+        return j
+      }
+      setFaceResult({
+        _real: true,
+        _ts: Date.now(),
+        deepface: j.deepface || null,
+        clinico: j.clinico || null,
+        clinicoError: j.clinicoError || null,
+      })
+      return j
+    } catch (e) {
+      if (!background) setFaceError(String(e?.message || e))
+      return null
+    } finally {
+      if (!background) setFaceAnalyzing(false)
+    }
+  }, [])
+
+  const ejecutarAnalisisRealRef = useRef(null)
+  useEffect(() => { ejecutarAnalisisRealRef.current = ejecutarAnalisisReal }, [ejecutarAnalisisReal])
+
+  // Mantener nombre legacy para no romper call sites existentes (captura, archivo, triple).
+  const ejecutarAnalisisSimulado = () => {
+    void ejecutarAnalisisReal({ background: false })
   }
+
+  /** Loop en vivo combinado: OpenAI cada ~12 s mientras DeepFace en vivo esté activo. */
+  const faceFullLiveTimerRef = useRef(0)
+  const faceFullLiveBusyRef = useRef(false)
+  useEffect(() => {
+    if (!faceDfLiveEnabled || !camaraEncendida) {
+      if (faceFullLiveTimerRef.current) {
+        window.clearTimeout(faceFullLiveTimerRef.current)
+        faceFullLiveTimerRef.current = 0
+      }
+      return
+    }
+    let cancelled = false
+    const loop = async () => {
+      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
+      if (!faceFullLiveBusyRef.current) {
+        faceFullLiveBusyRef.current = true
+        try { await ejecutarAnalisisRealRef.current?.({ background: true }) }
+        catch { /* tolerado */ }
+        finally { faceFullLiveBusyRef.current = false }
+      }
+      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
+      faceFullLiveTimerRef.current = window.setTimeout(loop, 12000)
+    }
+    faceFullLiveTimerRef.current = window.setTimeout(loop, 5000)
+    return () => {
+      cancelled = true
+      if (faceFullLiveTimerRef.current) {
+        window.clearTimeout(faceFullLiveTimerRef.current)
+        faceFullLiveTimerRef.current = 0
+      }
+    }
+  }, [faceDfLiveEnabled, camaraEncendida])
+
+  /** Volcado automático del último análisis IA al protocolo de la sesión (idempotente por marca). */
+  const lastAutoInsertRef = useRef("")
+  useEffect(() => {
+    if (!faceResult?._real || !faceResult?.clinico) return
+    const c = faceResult.clinico
+    const df = faceResult.deepface || {}
+    const recs = Array.isArray(c.recomendaciones) ? c.recomendaciones.filter(Boolean) : []
+    const arrugas = Array.isArray(c.arrugas) ? c.arrugas.filter(Boolean) : []
+    const alertas = Array.isArray(c.alertas) ? c.alertas.filter(Boolean) : []
+    const texto =
+      `\n\n[Análisis IA rostro — ${new Date(faceResult._ts || Date.now()).toLocaleString("es-ES")}]\n` +
+      `DeepFace: edad ~${df.age ?? "—"}, ${df.dominant_gender ?? "—"}, ${df.dominant_emotion ?? "—"}${df.dominant_race ? `, ${df.dominant_race}` : ""}.\n` +
+      `Piel: ${c.tipoPiel || "—"} · fototipo ${c.fototipo || "—"} · hidratación ${c.hidratacion || "—"} · luminosidad ${c.luminosidad || "—"}.\n` +
+      (c.simetria ? `Simetría: ${c.simetria}.\n` : "") +
+      (arrugas.length ? `Arrugas: ${arrugas.join(", ")}.\n` : "") +
+      (c.manchas ? `Manchas: ${c.manchas}.\n` : "") +
+      (c.porosYTextura ? `Poros/textura: ${c.porosYTextura}.\n` : "") +
+      (c.ojeras ? `Ojeras: ${c.ojeras}.\n` : "") +
+      (c.flacidez ? `Flacidez: ${c.flacidez}.\n` : "") +
+      (c.observacionesClinicas ? `Observaciones: ${c.observacionesClinicas}.\n` : "") +
+      (recs.length ? `Recomendaciones: ${recs.join("; ")}.\n` : "") +
+      (alertas.length ? `Alertas: ${alertas.join("; ")}.\n` : "") +
+      (c.disclaimer ? `${c.disclaimer}` : "")
+    if (texto === lastAutoInsertRef.current) return
+    lastAutoInsertRef.current = texto
+    setProtocolo(prev => {
+      const marker = "[Análisis IA rostro"
+      const idx = prev.indexOf(marker)
+      if (idx < 0) return (prev || "") + texto
+      const before = prev.slice(0, idx).replace(/\n+$/, "")
+      return `${before}${texto}`
+    })
+  }, [faceResult])
 
   const abrirCamara = async () => {
     setFaceError("")
@@ -8061,17 +8294,31 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     }
   }
 
-  const grabFaceFrameBase64Async = async () => {
+  const grabFaceFrameBase64Async = async (opts = {}) => {
+    const maxW = typeof opts.maxWidth === "number" ? opts.maxWidth : 0
+    const quality = typeof opts.quality === "number" ? opts.quality : 0.88
+    const drawToScaled = (srcW, srcH, drawer) => {
+      let w = srcW
+      let h = srcH
+      if (maxW > 0 && w > maxW) {
+        const ratio = maxW / w
+        w = maxW
+        h = Math.round(srcH * ratio)
+      }
+      const c = document.createElement("canvas")
+      c.width = w
+      c.height = h
+      drawer(c.getContext("2d"), w, h)
+      return c.toDataURL("image/jpeg", quality).split(",")[1]
+    }
     const v = videoRef.current
     if (camaraEncendida && v?.videoWidth) {
-      const c = document.createElement("canvas")
-      c.width = v.videoWidth
-      c.height = v.videoHeight
-      c.getContext("2d").drawImage(v, 0, 0)
-      return c.toDataURL("image/jpeg", 0.88).split(",")[1]
+      return drawToScaled(v.videoWidth, v.videoHeight, (ctx2, w, h) => {
+        ctx2.drawImage(v, 0, 0, w, h)
+      })
     }
-    if (facePreview?.startsWith("data:")) return facePreview.split(",")[1]
-    if (facePreview?.startsWith("blob:")) {
+    if (facePreview?.startsWith("data:") && !maxW) return facePreview.split(",")[1]
+    if (facePreview?.startsWith("data:") || facePreview?.startsWith("blob:")) {
       // blob: URLs son same-origin: NO usar crossOrigin = "anonymous" (causa tainted canvas)
       const img = await new Promise((resolve, reject) => {
         const i = new Image()
@@ -8079,11 +8326,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         i.onerror = () => reject(new Error("No se pudo leer la imagen"))
         i.src = facePreview
       })
-      const c = document.createElement("canvas")
-      c.width = img.naturalWidth
-      c.height = img.naturalHeight
-      c.getContext("2d").drawImage(img, 0, 0)
-      return c.toDataURL("image/jpeg", 0.88).split(",")[1]
+      return drawToScaled(img.naturalWidth, img.naturalHeight, (ctx2, w, h) => {
+        ctx2.drawImage(img, 0, 0, w, h)
+      })
     }
     return null
   }
@@ -8113,15 +8358,22 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     }
   }
 
-  const runFaceDeepface = async () => {
-    setFaceDfErr("")
-    setFaceDfResult(null)
+  const runFaceDeepface = async (opts = {}) => {
+    const background = opts.background === true
+    if (faceDfLiveBusyRef.current) return false
+    faceDfLiveBusyRef.current = true
+    if (!background) {
+      setFaceDfErr("")
+      setFaceDfResult(null)
+    }
     setFaceDfLoading(true)
     try {
-      const b64 = await grabFaceFrameBase64Async()
+      const b64 = await grabFaceFrameBase64Async(
+        background ? { maxWidth: 512, quality: 0.78 } : {},
+      )
       if (!b64) {
         setFaceDfErr("No hay imagen: abrí la cámara o elegí una foto.")
-        return
+        return false
       }
       const r = await fetch("/api/deepface", {
         method: "POST",
@@ -8129,14 +8381,90 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         body: JSON.stringify({ image_base64: b64 }),
       })
       const j = await r.json().catch(() => null)
-      if (!r.ok) throw new Error(j?.error || "Error DeepFace")
+      if (!r.ok) {
+        const msg = j?.error || "Error DeepFace"
+        if (background) {
+          setFaceDfErr(msg)
+        } else {
+          throw new Error(msg)
+        }
+        return false
+      }
+      if (j && j.ok && j.face_found === false) {
+        // en vivo: no es error, sólo "no hay cara ahora"
+        if (background) {
+          setFaceDfErr("Buscando rostro… acercate y mirá a la cámara")
+        } else {
+          setFaceDfErr("No se detectó rostro (acercate, luz frontal o mirá a la cámara).")
+        }
+        if (background) setFaceDfLiveTick(t => t + 1)
+        return true
+      }
+      setFaceDfErr("")
       setFaceDfResult(j)
+      if (background) setFaceDfLiveTick(t => t + 1)
+      return true
     } catch (e) {
       setFaceDfErr(String(e?.message || e))
+      return false
     } finally {
       setFaceDfLoading(false)
+      faceDfLiveBusyRef.current = false
     }
   }
+
+  useEffect(() => {
+    runFaceDeepfaceRef.current = runFaceDeepface
+  }, [runFaceDeepface])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!faceDfLiveEnabled) {
+      setFaceDfWorkerStatus(s => ({ ...s, polling: false }))
+      return () => {}
+    }
+    setFaceDfWorkerStatus(s => ({ ...s, polling: true }))
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const r = await fetch("/api/deepface/status")
+        if (r.ok) {
+          const j = await r.json()
+          setFaceDfWorkerStatus({ polling: true, ...j })
+        }
+      } catch { /* silencioso: el endpoint puede no existir en producción */ }
+      if (!cancelled) window.setTimeout(poll, 1500)
+    }
+    poll()
+    return () => {
+      cancelled = true
+    }
+  }, [faceDfLiveEnabled])
+
+  useEffect(() => {
+    if (!faceDfLiveEnabled || !camaraEncendida) {
+      if (faceDfLiveTimerRef.current) {
+        window.clearTimeout(faceDfLiveTimerRef.current)
+        faceDfLiveTimerRef.current = 0
+      }
+      return
+    }
+    let cancelled = false
+    const loop = async () => {
+      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
+      await runFaceDeepfaceRef.current?.({ background: true })
+      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
+      faceDfLiveTimerRef.current = window.setTimeout(loop, 900)
+    }
+    loop()
+    return () => {
+      cancelled = true
+      if (faceDfLiveTimerRef.current) {
+        window.clearTimeout(faceDfLiveTimerRef.current)
+        faceDfLiveTimerRef.current = 0
+      }
+    }
+  }, [faceDfLiveEnabled, camaraEncendida])
 
   const analizarRostroConIA = async (dataUrl) => {
     setFaceLandmarksLoading(true)
@@ -8558,16 +8886,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       setEvaluacion(ev => (ev ? ev + "\n[Foto anotada; si había MediaPipe se descargaron 3 PNG: croquis, malla, guías]" : "[Foto anotada; si había MediaPipe se descargaron 3 PNG: croquis, malla, guías]"))
     }
     imgBg.src = facePreview
-  }
-
-  const incorporarAnalisisAEvaluacion = () => {
-    if (!faceResult) return
-    const bloque =
-      `\n\n[Análisis facial asistido (demo) — ${new Date().toLocaleString("es-AR")}]\n` +
-      `Índice simetría facial (simulado): ${faceResult.simetria}/100. Luminosidad aparente: ${faceResult.luminosidad}%. ` +
-      `Hidratación estimada: ${faceResult.hidratacion}. Líneas / volumen: ${faceResult.lineas}. Tono: ${faceResult.tono}. ` +
-      `${faceResult.sugerencias} ${faceResult.disclaimer}`
-    setEvaluacion(ev => (ev ? ev + bloque : bloque.trim()))
   }
 
   const aplicarPayloadDoctorIA = async out => {
@@ -9675,20 +9993,51 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const goNextStep = () => setWizardFase(wizardDefs[Math.min(wizardDefs.length - 1, stepIndex + 1)]?.id || "orden")
 
   const medCard = {
-    background: "#fff",
-    borderRadius: 14,
-    border: `1px solid ${C.border}`,
-    boxShadow: "0 1px 3px rgba(15,23,42,.06)",
-    padding: narrow ? 16 : 20,
-    marginBottom: 16,
+    background: "linear-gradient(135deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.68) 100%)",
+    backdropFilter: "blur(22px) saturate(200%)",
+    WebkitBackdropFilter: "blur(22px) saturate(200%)",
+    borderRadius: 18,
+    border: "1px solid rgba(255,255,255,0.55)",
+    boxShadow: "0 1px 0 rgba(255,255,255,0.7) inset, 0 18px 40px -22px rgba(15,23,42,.22), 0 1px 3px rgba(15,23,42,.05)",
+    padding: narrow ? 18 : 22,
+    marginBottom: 18,
+    position: "relative",
+    zIndex: 2,
+  }
+  const medCardDark = {
+    background: "linear-gradient(160deg, rgba(17,24,39,0.92) 0%, rgba(15,23,42,0.9) 100%)",
+    backdropFilter: "blur(22px) saturate(180%)",
+    WebkitBackdropFilter: "blur(22px) saturate(180%)",
+    borderRadius: 18,
+    border: "1px solid rgba(148,163,184,0.22)",
+    boxShadow: "0 1px 0 rgba(255,255,255,0.08) inset, 0 20px 40px -22px rgba(2,6,23,.6), 0 1px 3px rgba(15,23,42,.5)",
+    padding: narrow ? 18 : 22,
+    marginBottom: 18,
+    color: "#e2e8f0",
+    position: "relative",
+    zIndex: 2,
+  }
+  const wizardIcons = {
+    veredicto: Mic,
+    propuesta_ia: ClipboardCheck,
+    registro: Camera,
+    resultado: ScanLine,
+    evaluacion: FileText,
+    orden: CheckCircle2,
   }
 
   const tripleVideoEnPantallaCompleta = usarTripleSesionMedica && camaraEncendida && camaraFullscreen
   const videoTripleEnPanel = camaraEncendida && (!usarTripleSesionMedica || !camaraFullscreen)
 
   return (
-    <div style={{ minHeight:"100dvh", background:"#f1f5f9", color:C.text, fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",
-      paddingBottom:"env(safe-area-inset-bottom)", position:"relative" }}>
+    <div style={{ minHeight:"100dvh", background:"linear-gradient(135deg,#EEF2FF 0%,#F4F6FB 45%,#FDF4FF 100%)", color:C.text, fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",
+      paddingBottom:"env(safe-area-inset-bottom)", position:"relative", overflowX:"hidden" }}>
+      <div className="erp-orbs" aria-hidden>
+        <span className="erp-orb erp-orb-1"/>
+        <span className="erp-orb erp-orb-2"/>
+        <span className="erp-orb erp-orb-3"/>
+        <span className="erp-orb erp-orb-4"/>
+      </div>
       {(docIaLoading || resultadoIaLoading) && (
         <div
           role="status"
@@ -9734,71 +10083,173 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         </div>
       )}
       <header style={{
-        padding:"max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 14px max(16px, env(safe-area-inset-left))",
-        borderBottom:`1px solid ${C.border}`,
-        background:"#fff",
+        padding:"max(14px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 16px max(18px, env(safe-area-inset-left))",
+        background:"linear-gradient(135deg, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.58) 100%)",
+        backdropFilter:"blur(22px) saturate(200%)",
+        WebkitBackdropFilter:"blur(22px) saturate(200%)",
+        borderBottom:"1px solid rgba(255,255,255,0.55)",
+        boxShadow:"0 1px 0 rgba(255,255,255,0.7) inset, 0 10px 28px -20px rgba(15,23,42,.22)",
         display:"flex", alignItems: narrow ? "flex-start" : "center", justifyContent:"space-between", flexWrap:"wrap", gap:12,
         flexDirection: narrow ? "column" : "row",
+        position:"relative", zIndex:5,
       }}>
-        <div style={{ display:"flex", alignItems:"center", gap:12, minWidth:0, width: narrow ? "100%" : undefined }}>
-          <div style={{ width:44, height:44, borderRadius:12, background:C.subtle, border:`1px solid ${C.border}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-            <Stethoscope size={22} color={C.violet}/>
+        <div style={{ display:"flex", alignItems:"center", gap:14, minWidth:0, width: narrow ? "100%" : undefined }}>
+          <div style={{
+            width:48, height:48, borderRadius:14,
+            background:C.gradient,
+            display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0,
+            boxShadow:`0 10px 24px -8px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.45) inset`,
+          }}>
+            <Stethoscope size={22} color="#fff" strokeWidth={2.4}/>
           </div>
           <div style={{ minWidth:0, flex:1 }}>
-            <div style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.06em", color:C.muted, fontWeight:700 }}>Sesión médica · Clínica {clinicId}</div>
-            <div style={{ fontSize: narrow ? 18 : 20, fontWeight:800, color:C.text, wordBreak:"break-word" }}>{turno.cliente}</div>
-            <div style={{ fontSize:13, color:C.muted, marginTop:2, lineHeight:1.35 }}>{turno.hora} · {turno.servicio} · {profNombre}</div>
-            <div style={{ fontSize:12, color:C.violet, marginTop:3, fontWeight:700 }}>Sala: {getSalaTrabajoTurno(turno) || "—"}</div>
+            <div style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.08em", color:C.violet, fontWeight:800 }}>Sesión médica · Clínica {clinicId}</div>
+            <div style={{ fontSize: narrow ? 19 : 22, fontWeight:800, color:C.text, wordBreak:"break-word", letterSpacing:"-0.02em" }}>{turno.cliente}</div>
+            <div style={{ fontSize:13, color:C.muted, marginTop:3, lineHeight:1.4 }}>{turno.hora} · {turno.servicio} · {profNombre}</div>
+            <div style={{ fontSize:12, color:C.violet, marginTop:4, fontWeight:700 }}>Sala: {getSalaTrabajoTurno(turno) || "—"}</div>
           </div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10, width: narrow ? "100%" : undefined, justifyContent: narrow ? "space-between" : "flex-end" }}>
           <Badge type={turno.estado}>{estadoLabel[turno.estado] || turno.estado}</Badge>
-          <Btn variant="outline" onClick={onExit} style={{ borderColor:C.border, color:C.text, minHeight:44, minWidth:44, background:"#fff" }}>Salir</Btn>
+          <Btn variant="outline" onClick={onExit} style={{
+            borderColor:"rgba(255,255,255,0.6)", color:C.text, minHeight:44, minWidth:44,
+            background:"linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7))",
+            backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)",
+          }}>Salir</Btn>
         </div>
       </header>
 
-      <div style={{ maxWidth:640, margin:"0 auto", padding:`18px max(14px, env(safe-area-inset-left)) ${narrow ? "88px" : "32px"} max(14px, env(safe-area-inset-right))` }}>
-        <div style={{ marginBottom:20 }}>
-          <div style={{ fontSize:12, fontWeight:700, color:C.muted, marginBottom:10, letterSpacing:"0.04em" }}>Progreso</div>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
-            {wizardDefs.map((s, i) => {
-              const active = wizardFase === s.id
-              const past = stepIndex > i
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => {
-                    if (i <= stepIndex) setWizardFase(s.id)
-                  }}
-                  disabled={i > stepIndex}
-                  style={{
-                    border:`1px solid ${active ? C.violet : C.border}`,
-                    background: active ? C.violetLight : past ? "#fff" : C.subtle,
-                    color: active ? C.violet : C.muted,
-                    borderRadius:999,
-                    padding:"6px 12px",
-                    fontSize:11,
-                    fontWeight:700,
-                    whiteSpace:"nowrap",
-                    cursor: i > stepIndex ? "not-allowed" : "pointer",
-                    opacity: i > stepIndex ? 0.45 : 1,
-                  }}
-                >
-                  {i + 1}. {s.label}
-                </button>
-              )
-            })}
+      <div style={{ maxWidth:680, margin:"0 auto", padding:`22px max(14px, env(safe-area-inset-left)) ${narrow ? "100px" : "36px"} max(14px, env(safe-area-inset-right))`, position:"relative", zIndex:2 }}>
+        <div style={{
+          ...medCard,
+          padding: narrow ? 16 : 20,
+          marginBottom: 22,
+        }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, gap:12, flexWrap:"wrap" }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Progreso</div>
+              <div style={{ fontSize:15, fontWeight:800, color:C.text, letterSpacing:"-0.01em", marginTop:2 }}>
+                Paso {stepIndex + 1} de {wizardDefs.length} · {wizardDefs[stepIndex]?.label || ""}
+              </div>
+            </div>
+            <div style={{
+              display:"inline-flex", alignItems:"center", gap:6,
+              padding:"6px 12px", borderRadius:999,
+              background:"rgba(99,102,241,0.1)", border:"1px solid rgba(99,102,241,0.25)",
+              fontSize:11, fontWeight:700, color:C.violet,
+            }}>
+              {Math.round(((stepIndex + 1) / wizardDefs.length) * 100)}%
+            </div>
           </div>
-          <p style={{ fontSize:13, color:C.muted, marginTop:12, lineHeight:1.5, marginBottom:0 }}>
-            El avance se guarda automáticamente. Si cerrás el navegador, podés reanudar en la misma fase.
+          <div style={{
+            position:"relative",
+            padding: narrow ? "6px 4px 2px" : "8px 8px 4px",
+          }}>
+            <div style={{
+              position:"absolute",
+              left: narrow ? 22 : 26,
+              right: narrow ? 22 : 26,
+              top: narrow ? 22 : 24,
+              height:3,
+              borderRadius:2,
+              background:"rgba(226,232,240,0.8)",
+              zIndex:0,
+            }}/>
+            <div style={{
+              position:"absolute",
+              left: narrow ? 22 : 26,
+              top: narrow ? 22 : 24,
+              height:3,
+              borderRadius:2,
+              width: `calc((100% - ${narrow ? 44 : 52}px) * ${stepIndex / Math.max(1, wizardDefs.length - 1)})`,
+              background: C.gradient,
+              transition:"width .4s cubic-bezier(.4,0,.2,1)",
+              zIndex:1,
+            }}/>
+            <div style={{ position:"relative", zIndex:2, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:4 }}>
+              {wizardDefs.map((s, i) => {
+                const active = wizardFase === s.id
+                const past = stepIndex > i
+                const Icon = wizardIcons[s.id] || ClipboardCheck
+                const disabled = i > stepIndex
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => { if (!disabled) setWizardFase(s.id) }}
+                    disabled={disabled}
+                    style={{
+                      all:"unset",
+                      display:"flex", flexDirection:"column", alignItems:"center", gap:6,
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      flex:1, minWidth:0,
+                      opacity: disabled ? 0.45 : 1,
+                    }}
+                    aria-current={active ? "step" : undefined}
+                    aria-label={`Paso ${i + 1}: ${s.label}`}
+                  >
+                    <div style={{
+                      width: narrow ? 36 : 44, height: narrow ? 36 : 44, borderRadius:"50%",
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      background: active
+                        ? C.gradient
+                        : past
+                          ? "linear-gradient(135deg,#a5b4fc,#c4b5fd)"
+                          : "linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7))",
+                      border: active
+                        ? "2px solid #fff"
+                        : past
+                          ? "2px solid rgba(255,255,255,0.9)"
+                          : "2px solid rgba(226,232,240,0.9)",
+                      color: (active || past) ? "#fff" : C.muted,
+                      boxShadow: active
+                        ? `0 8px 22px -6px ${C.violet}80, 0 1px 0 rgba(255,255,255,0.45) inset`
+                        : past
+                          ? "0 4px 10px -4px rgba(99,102,241,.35)"
+                          : "0 1px 2px rgba(15,23,42,.06)",
+                      transition:"all .3s cubic-bezier(.4,0,.2,1)",
+                      transform: active ? "scale(1.08)" : "scale(1)",
+                    }}>
+                      {past ? <CheckCircle2 size={narrow ? 18 : 22} strokeWidth={2.4}/> : <Icon size={narrow ? 16 : 20} strokeWidth={2.2}/>}
+                    </div>
+                    <span style={{
+                      fontSize: narrow ? 9 : 10,
+                      fontWeight: active ? 800 : 700,
+                      color: active ? C.violet : past ? C.text : C.muted,
+                      textAlign:"center",
+                      lineHeight:1.2,
+                      letterSpacing:"-0.005em",
+                      display:"block",
+                      maxWidth: "100%",
+                      whiteSpace: narrow ? "nowrap" : "normal",
+                      overflow: narrow ? "hidden" : "visible",
+                      textOverflow: narrow ? "ellipsis" : "clip",
+                    }}>
+                      {s.label}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <p style={{ fontSize:12, color:C.muted, marginTop:14, lineHeight:1.5, marginBottom:0, display:"flex", alignItems:"center", gap:6 }}>
+            <CheckCircle2 size={13} color={C.success}/> El avance se guarda automáticamente · podés reanudar en la misma fase.
           </p>
         </div>
 
-        {wizardFase === "veredicto" && <div style={medCard}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
-            <Mic size={20} color={C.violet} />
-            <span style={{ fontSize:16, fontWeight:800, color:C.text }}>1 · Veredicto clínico</span>
+        {wizardFase === "veredicto" && <div key="wiz-veredicto" className="erp-fadein" style={medCard}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+              background:C.gradient, color:"#fff",
+              boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+            }}>
+              <Mic size={18} strokeWidth={2.4}/>
+            </div>
+            <div>
+              <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso 1</div>
+              <div style={{ fontSize:17, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Veredicto clínico</div>
+            </div>
           </div>
           <p style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
             Describí hallazgos y plan en voz o texto. Luego <strong>procesamos con IA</strong> para rellenar evaluación, servicio y protocolo.
@@ -9885,10 +10336,19 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         </div>}
 
         {wizardFase === "propuesta_ia" && (
-          <div style={medCard}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"wrap" }}>
-              <ClipboardCheck size={20} color={C.violet} />
-              <span style={{ fontSize:16, fontWeight:800, color:C.text }}>2 · Propuesta generada por IA</span>
+          <div key="wiz-propuesta" className="erp-fadein" style={medCard}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+              <div style={{
+                width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+                background:C.gradient, color:"#fff",
+                boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+              }}>
+                <ClipboardCheck size={18} strokeWidth={2.4}/>
+              </div>
+              <div>
+                <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso 2</div>
+                <div style={{ fontSize:17, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Propuesta generada por IA</div>
+              </div>
             </div>
             <p style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
               Revisá los campos que completó el sistema. Podés volver al veredicto para ajustar el texto y reprocesar.
@@ -9925,10 +10385,19 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         )}
 
         {wizardFase === "resultado" && (
-          <div style={medCard}>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
-              <ClipboardCheck size={20} color={C.violet} />
-              <span style={{ fontSize:16, fontWeight:800, color:C.text }}>4 · Resultado de la sesión</span>
+          <div key="wiz-resultado" className="erp-fadein" style={medCard}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+              <div style={{
+                width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+                background:C.gradient, color:"#fff",
+                boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+              }}>
+                <ScanLine size={18} strokeWidth={2.4}/>
+              </div>
+              <div>
+                <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso 4</div>
+                <div style={{ fontSize:17, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Resultado de la sesión</div>
+              </div>
             </div>
             <p style={{ fontSize:13, color:C.muted, marginBottom:12, lineHeight:1.5 }}>
               Dictá o escribí cómo quedó la paciente tras el tratamiento; la IA redacta el <strong>resultado clínico</strong> para historia / seguimiento. Podés tomar abajo las tres fotos de <strong>después</strong> si aún no las completaste.
@@ -9990,12 +10459,24 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           </div>
         )}
 
-        {(wizardFase === "registro" || wizardFase === "resultado") && <div style={{ ...medCard, background:"#0f172a", color:"#e2e8f0", border:"1px solid #334155" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
-            <Camera size={20} color="#c4b5fd" />
-            <span style={{ fontSize:15, fontWeight:800, color:"#fff" }}>
-              {wizardFase === "registro" ? "3 · Fotos antes" : "4 · Fotos después"}
-            </span>
+        {(wizardFase === "registro" || wizardFase === "resultado") && <div key={`wiz-foto-${wizardFase}`} className="erp-fadein" style={medCardDark}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+              background:"linear-gradient(135deg, rgba(167,139,250,.25), rgba(99,102,241,.25))",
+              border:"1px solid rgba(167,139,250,.35)",
+              color:"#c4b5fd",
+            }}>
+              <Camera size={18} strokeWidth={2.4}/>
+            </div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:800, color:"#a78bfa", letterSpacing:"0.08em", textTransform:"uppercase" }}>
+                {wizardFase === "registro" ? "Paso 3" : "Paso 4 · Captura"}
+              </div>
+              <div style={{ fontSize:16, fontWeight:800, color:"#fff", letterSpacing:"-0.01em" }}>
+                {wizardFase === "registro" ? "Fotos antes" : "Fotos después"}
+              </div>
+            </div>
             <Badge type="general">Demo</Badge>
           </div>
           <p style={{ fontSize:12, color:"#94a3b8", marginBottom:12, lineHeight:1.45 }}>
@@ -10275,7 +10756,42 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               >
                 {faceDfLoading ? <Loader2 size={16} className="erp-spin" /> : <ScanLine size={16} />} DeepFace (Python)
               </Btn>
+              <Btn
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setFaceDfErr("")
+                  setFaceDfLiveTick(0)
+                  setFaceDfLiveEnabled(v => !v)
+                }}
+                disabled={!camaraEncendida}
+                style={{
+                  borderColor: faceDfLiveEnabled ? "rgba(16,185,129,.75)" : "rgba(148,163,184,.45)",
+                  color: faceDfLiveEnabled ? "#6ee7b7" : "#cbd5e1",
+                  minHeight:42,
+                  flex: narrow ? "1 1 100%" : "0 1 auto",
+                  justifyContent:"center",
+                }}
+              >
+                {faceDfLiveEnabled ? "Detener DeepFace en vivo" : "DeepFace en vivo"}
+              </Btn>
             </div>
+            {camaraEncendida && (
+              <div style={{ fontSize:11, color:"#94a3b8", marginTop:8, display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
+                <span>
+                  Estado DeepFace en vivo: <strong style={{ color: faceDfLiveEnabled ? "#6ee7b7" : "#cbd5e1" }}>{faceDfLiveEnabled ? "activo" : "detenido"}</strong>
+                </span>
+                {faceDfLiveEnabled && faceDfWorkerStatus.warming && (
+                  <span style={{ color:"#fbbf24", display:"inline-flex", alignItems:"center", gap:4 }}>
+                    <Loader2 size={11} className="erp-spin" /> calentando modelo…
+                  </span>
+                )}
+                {faceDfLiveEnabled && !faceDfWorkerStatus.warming && faceDfWorkerStatus.ready && (
+                  <span style={{ color:"#86efac" }}>· modelo listo</span>
+                )}
+                {faceDfLiveEnabled && ` · frames: ${faceDfLiveTick}`}
+              </div>
+            )}
             {faceOcrErr && <div style={{ fontSize:12, color:"#fca5a5", marginTop:8 }}>{faceOcrErr}</div>}
             {faceOcrText && (
               <div style={{ marginTop:10, padding:10, borderRadius:10, background:"rgba(0,0,0,.35)", fontSize:12, color:"#e2e8f0", whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
@@ -10302,7 +10818,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
             </div>
           )}
 
-          {faceResult && !faceAnalyzing && (
+          {faceResult && !faceAnalyzing && faceResult._real && (
             <div style={{
               marginTop:14,
               padding:14,
@@ -10313,17 +10829,69 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               color:"#e2e8f0",
               lineHeight:1.5,
             }}>
-              <div style={{ fontWeight:800, color:"#c4b5fd", marginBottom:8 }}>Resultado (simulación)</div>
-              <div>Simetría facial (índice): <strong>{faceResult.simetria}/100</strong></div>
-              <div>Luminosidad aparente: <strong>{faceResult.luminosidad}%</strong></div>
-              <div>Hidratación estimada: <strong>{faceResult.hidratacion}</strong></div>
-              <div>Líneas / volumen: {faceResult.lineas}</div>
-              <div>Tono de piel: {faceResult.tono}</div>
-              <div style={{ marginTop:8, fontSize:12, color:"#94a3b8" }}>{faceResult.sugerencias}</div>
-              <div style={{ fontSize:11, color:"#64748b", marginTop:8 }}>{faceResult.disclaimer}</div>
-              <Btn type="button" variant="outline" style={{ marginTop:12, width:"100%", borderColor:"rgba(255,255,255,.35)", color:"#fff" }} onClick={incorporarAnalisisAEvaluacion}>
-                Incorporar texto a evaluación clínica
-              </Btn>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, flexWrap:"wrap", gap:8 }}>
+                <div style={{ fontWeight:800, color:"#c4b5fd" }}>Análisis IA del rostro (DeepFace + OpenAI)</div>
+                {faceResult._ts && (
+                  <div style={{ fontSize:11, color:"#64748b" }}>
+                    actualizado {new Date(faceResult._ts).toLocaleTimeString("es-ES")}
+                  </div>
+                )}
+              </div>
+
+              {faceResult.deepface && (
+                <div style={{ marginBottom:10, padding:"8px 10px", borderRadius:8, background:"rgba(16,185,129,.1)", border:"1px solid rgba(16,185,129,.28)" }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#6ee7b7", marginBottom:4 }}>DeepFace (local)</div>
+                  <div>Edad estimada: <strong>{faceResult.deepface.age ?? "—"}</strong> · Género: <strong>{String(faceResult.deepface.dominant_gender ?? "—")}</strong></div>
+                  <div>Emoción: <strong>{String(faceResult.deepface.dominant_emotion ?? "—")}</strong>{faceResult.deepface.dominant_race ? <> · Etnia aprox.: <strong>{String(faceResult.deepface.dominant_race)}</strong></> : null}</div>
+                  {typeof faceResult.deepface.face_confidence === "number" && (
+                    <div style={{ fontSize:11, color:"#94a3b8", marginTop:2 }}>Confianza detección: {(faceResult.deepface.face_confidence * 100).toFixed(0)}%</div>
+                  )}
+                </div>
+              )}
+
+              {faceResult.clinico ? (
+                <div style={{ padding:"8px 10px", borderRadius:8, background:"rgba(167,139,250,.1)", border:"1px solid rgba(167,139,250,.28)" }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#c4b5fd", marginBottom:4 }}>Evaluación clínico-estética (OpenAI Vision)</div>
+                  <div>Tipo de piel: <strong>{faceResult.clinico.tipoPiel || "—"}</strong> · Fototipo: <strong>{faceResult.clinico.fototipo || "—"}</strong></div>
+                  <div>Hidratación: <strong>{faceResult.clinico.hidratacion || "—"}</strong> · Luminosidad: <strong>{faceResult.clinico.luminosidad || "—"}</strong></div>
+                  {faceResult.clinico.simetria && <div>Simetría: {faceResult.clinico.simetria}</div>}
+                  {Array.isArray(faceResult.clinico.arrugas) && faceResult.clinico.arrugas.length > 0 && (
+                    <div>Arrugas: {faceResult.clinico.arrugas.join(", ")}</div>
+                  )}
+                  {faceResult.clinico.manchas && <div>Manchas: {faceResult.clinico.manchas}</div>}
+                  {faceResult.clinico.porosYTextura && <div>Poros/textura: {faceResult.clinico.porosYTextura}</div>}
+                  {faceResult.clinico.ojeras && <div>Ojeras: {faceResult.clinico.ojeras}</div>}
+                  {faceResult.clinico.flacidez && <div>Flacidez: {faceResult.clinico.flacidez}</div>}
+                  {faceResult.clinico.observacionesClinicas && (
+                    <div style={{ marginTop:6, fontStyle:"italic", color:"#cbd5e1" }}>{faceResult.clinico.observacionesClinicas}</div>
+                  )}
+                  {Array.isArray(faceResult.clinico.recomendaciones) && faceResult.clinico.recomendaciones.length > 0 && (
+                    <div style={{ marginTop:8 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:"#c4b5fd" }}>Recomendaciones</div>
+                      <ul style={{ margin:"4px 0 0 18px", padding:0 }}>
+                        {faceResult.clinico.recomendaciones.map((x, i) => <li key={i} style={{ marginBottom:2 }}>{x}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {Array.isArray(faceResult.clinico.alertas) && faceResult.clinico.alertas.length > 0 && (
+                    <div style={{ marginTop:8, padding:"6px 8px", borderRadius:6, background:"rgba(239,68,68,.1)", border:"1px solid rgba(239,68,68,.35)" }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:"#fca5a5" }}>⚠ Alertas</div>
+                      <ul style={{ margin:"4px 0 0 18px", padding:0, color:"#fecaca" }}>
+                        {faceResult.clinico.alertas.map((x, i) => <li key={i}>{x}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <div style={{ fontSize:11, color:"#64748b", marginTop:8 }}>{faceResult.clinico.disclaimer || "Análisis asistido por IA; no reemplaza valoración presencial."}</div>
+                </div>
+              ) : faceResult.clinicoError ? (
+                <div style={{ padding:"8px 10px", borderRadius:8, background:"rgba(239,68,68,.1)", border:"1px solid rgba(239,68,68,.28)", fontSize:12, color:"#fca5a5" }}>
+                  No se pudo obtener el análisis clínico (OpenAI): {faceResult.clinicoError}
+                </div>
+              ) : null}
+
+              <div style={{ fontSize:11, color:"#6ee7b7", marginTop:10 }}>
+                ✓ Volcado automático al protocolo de la sesión
+              </div>
             </div>
           )}
           <div style={{ marginTop:18, paddingTop:16, borderTop:"1px solid #334155", display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
@@ -10365,8 +10933,20 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           </div>
         </div>}
 
-        {wizardFase === "evaluacion" && <div style={medCard}>
-          <div style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:8 }}>5 · Evaluación clínica</div>
+        {wizardFase === "evaluacion" && <div key="wiz-evaluacion" className="erp-fadein" style={medCard}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+              background:C.gradient, color:"#fff",
+              boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+            }}>
+              <FileText size={18} strokeWidth={2.4}/>
+            </div>
+            <div>
+              <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso 5</div>
+              <div style={{ fontSize:17, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Evaluación clínica</div>
+            </div>
+          </div>
           <p style={{ fontSize:13, color:C.muted, marginBottom:12, lineHeight:1.45 }}>Ajustá o ampliá el texto; se guarda con el protocolo al cerrar la sesión.</p>
           <textarea
             style={{ width:"100%", minHeight: narrow ? 100 : 120, borderRadius:10, border:`1px solid ${C.border}`, background:"#fafafa", color:C.text, padding:14, fontSize:16, resize:"vertical", boxSizing:"border-box" }}
@@ -10384,8 +10964,20 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           </div>
         </div>}
 
-        {wizardFase === "orden" && <div style={{ ...medCard, display:"flex", flexDirection:"column", gap:16 }}>
-          <div style={{ fontSize:16, fontWeight:800, color:C.text }}>6 · Orden, insumos y envío</div>
+        {wizardFase === "orden" && <div key="wiz-orden" className="erp-fadein" style={{ ...medCard, display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+              background:C.gradient, color:"#fff",
+              boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+            }}>
+              <CheckCircle2 size={18} strokeWidth={2.4}/>
+            </div>
+            <div>
+              <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso 6 · Final</div>
+              <div style={{ fontSize:17, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Orden, insumos y envío</div>
+            </div>
+          </div>
           <p style={{ fontSize:13, color:C.muted, lineHeight:1.45, margin:0 }}>Confirmá uno o varios servicios a facturar y el protocolo; al finalizar se descuenta stock y se envía el cobro a recepción.</p>
           <FG label="Servicios a facturar (suman en recepción)" full>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -10549,17 +11141,24 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
             right:0,
             bottom:0,
             zIndex:1200,
-            padding:"10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))",
-            background:"#fff",
-            borderTop:`1px solid ${C.border}`,
+            padding:"12px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))",
+            background:"linear-gradient(135deg, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.72) 100%)",
+            backdropFilter:"blur(22px) saturate(200%)",
+            WebkitBackdropFilter:"blur(22px) saturate(200%)",
+            borderTop:"1px solid rgba(255,255,255,0.55)",
+            boxShadow:"0 -10px 28px -12px rgba(15,23,42,.2), 0 -1px 0 rgba(255,255,255,0.7) inset",
             display:"grid",
             gridTemplateColumns:"auto auto 1fr",
-            gap:8,
+            gap:10,
             alignItems:"center",
           }}>
-            <Btn variant="outline" sm onClick={goPrevStep} disabled={stepIndex <= 0} style={{ borderColor:C.border, color:C.text, minHeight:42, background:"#fff" }}>Atrás</Btn>
-            <Btn variant="outline" sm onClick={goNextStep} disabled={stepIndex >= wizardDefs.length - 1} style={{ borderColor:C.border, color:C.text, minHeight:42, background:"#fff" }}>Sig.</Btn>
-            <Btn onClick={() => void finalizar()} disabled={finalizando || noServicios || srvsOrden.length === 0 || !protocolo.trim() || wizardFase !== "orden"} style={{ minHeight:42, justifyContent:"center" }}>{finalizando ? "Enviando..." : "Enviar"}</Btn>
+            <Btn variant="outline" sm onClick={goPrevStep} disabled={stepIndex <= 0} style={{ borderColor:"rgba(255,255,255,0.6)", color:C.text, minHeight:44, background:"rgba(255,255,255,0.72)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)" }}>
+              <ChevronLeft size={14}/> Atrás
+            </Btn>
+            <Btn variant="outline" sm onClick={goNextStep} disabled={stepIndex >= wizardDefs.length - 1} style={{ borderColor:"rgba(255,255,255,0.6)", color:C.text, minHeight:44, background:"rgba(255,255,255,0.72)", backdropFilter:"blur(12px)", WebkitBackdropFilter:"blur(12px)" }}>
+              Sig. <ChevronRight size={14}/>
+            </Btn>
+            <Btn onClick={() => void finalizar()} disabled={finalizando || noServicios || srvsOrden.length === 0 || !protocolo.trim() || wizardFase !== "orden"} style={{ minHeight:44, justifyContent:"center", background:C.gradient, border:"none", fontWeight:800 }}>{finalizando ? "Enviando…" : "Enviar"}</Btn>
           </div>
         )}
       </div>
@@ -11164,25 +11763,84 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
 
 function DoctorAreaLanding({ clinic, onOpenDemo, demoTurno }) {
   const linkDemo = demoTurno && typeof window !== "undefined" ? buildDoctorSessionUrl({ clinicId: clinic, turnoId: demoTurno.id }) : ""
+  const glassCard = {
+    background: "linear-gradient(135deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.66) 100%)",
+    backdropFilter: "blur(22px) saturate(200%)",
+    WebkitBackdropFilter: "blur(22px) saturate(200%)",
+    border: "1px solid rgba(255,255,255,0.55)",
+    borderRadius: 18,
+    boxShadow: "0 1px 0 rgba(255,255,255,0.7) inset, 0 18px 40px -22px rgba(15,23,42,.22), 0 1px 3px rgba(15,23,42,.05)",
+  }
+  const flow = [
+    { icon: QrCode, label: "Escanear QR del turno" },
+    { icon: Stethoscope, label: "Veredicto y propuesta IA" },
+    { icon: Camera, label: "Fotos antes / después" },
+    { icon: CheckCircle2, label: "Orden y envío a recepción" },
+  ]
   return (
     <div>
-      <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Área médica (acceso por QR)</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:18, maxWidth:640 }}>
-        Desde <strong>Agenda</strong>, generá un código QR por turno: quien atiende lo escanea con el celular (misma URL de esta app) e inicia sesión con usuario especialista.
-        Se abre esta vista de evaluación y orden de servicio vinculada al turno del paciente.
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:10, flexWrap:"wrap" }}>
+        <div style={{
+          width:52, height:52, borderRadius:16,
+          background:C.gradient, display:"flex", alignItems:"center", justifyContent:"center",
+          boxShadow:`0 12px 28px -8px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.45) inset`,
+        }}>
+          <Stethoscope size={26} color="#fff" strokeWidth={2.4}/>
+        </div>
+        <div>
+          <div style={{ fontSize:11, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Módulo clínico</div>
+          <h2 style={{ fontSize:24, fontWeight:800, margin:0, color:C.text, letterSpacing:"-0.02em" }}>Área médica</h2>
+        </div>
+      </div>
+      <p style={{ fontSize:14, color:C.muted, marginBottom:20, maxWidth:680, lineHeight:1.55 }}>
+        Acceso por <strong>código QR</strong> del turno: quien atiende lo escanea con el móvil (misma URL de esta app) e inicia sesión con usuario <strong>especialista</strong>. Se abre el asistente guiado por fases para evaluar, registrar fotos y emitir la orden de servicio.
       </p>
-      <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)", maxWidth:560 }}>
-        <div style={{ fontSize:13, fontWeight:700, marginBottom:10, display:"flex", alignItems:"center", gap:8 }}><QrCode size={18} color={C.violet}/> Demo rápida</div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:12, marginBottom:20, maxWidth:860 }}>
+        {flow.map((s, i) => {
+          const Icon = s.icon
+          return (
+            <div key={i} style={{ ...glassCard, padding:16, display:"flex", alignItems:"center", gap:12 }}>
+              <div style={{
+                width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+                background:"rgba(99,102,241,0.1)", border:"1px solid rgba(99,102,241,0.25)", color:C.violet,
+                flexShrink:0,
+              }}>
+                <Icon size={18} strokeWidth={2.2}/>
+              </div>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:10, fontWeight:800, color:C.muted, letterSpacing:"0.08em", textTransform:"uppercase" }}>Paso {i + 1}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:C.text, lineHeight:1.3 }}>{s.label}</div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ ...glassCard, padding:22, maxWidth:620 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
+          <div style={{
+            width:36, height:36, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center",
+            background:C.gradient, color:"#fff",
+          }}>
+            <QrCode size={18} strokeWidth={2.4}/>
+          </div>
+          <div style={{ fontSize:15, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Demo rápida sin QR</div>
+        </div>
         {demoTurno ? (
-          <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>Paciente de ejemplo en sala: <strong>{demoTurno.cliente}</strong> (turno #{demoTurno.id}). Abrí la sesión médica sin escanear.</p>
+          <p style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
+            Paciente de ejemplo en sala: <strong style={{ color:C.text }}>{demoTurno.cliente}</strong> (turno #{demoTurno.id}). Abrí la sesión médica sin escanear.
+          </p>
         ) : (
           <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>No hay turnos demo en esta clínica.</p>
         )}
         <div style={{ display:"flex", flexWrap:"wrap", gap:10 }}>
-          <Btn disabled={!demoTurno} onClick={() => demoTurno && onOpenDemo(demoTurno)}><Stethoscope size={14}/> Abrir sesión demo</Btn>
+          <Btn disabled={!demoTurno} onClick={() => demoTurno && onOpenDemo(demoTurno)} style={{ background:C.gradient, border:"none", minHeight:44 }}>
+            <Stethoscope size={14}/> Abrir sesión demo
+          </Btn>
         </div>
         {linkDemo && (
-          <p style={{ fontSize:11, color:C.muted, marginTop:14, wordBreak:"break-all" }}>
+          <p style={{ fontSize:11, color:C.muted, marginTop:14, wordBreak:"break-all", lineHeight:1.5 }}>
             Enlace equivalente: <code style={codeStyle()}>{linkDemo}</code>
           </p>
         )}
@@ -12740,7 +13398,15 @@ export default function App() {
 
   return (
     <div style={{ display:"flex", width:"100%", height:"100dvh", fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",
-      background:C.bg, overflow:"hidden", position:"relative" }}>
+      background:"transparent", overflow:"hidden", position:"relative" }}>
+
+      {/* ── ORBES ANIMADOS DE FONDO (liquid glass) ── */}
+      <div className="erp-orbs" aria-hidden>
+        <span className="erp-orb erp-orb-1"/>
+        <span className="erp-orb erp-orb-2"/>
+        <span className="erp-orb erp-orb-3"/>
+        <span className="erp-orb erp-orb-4"/>
+      </div>
 
       {narrowNav && mobileNavOpen && (
         <button type="button" className="erp-nav-backdrop" aria-label="Cerrar menú" onClick={() => setMobileNavOpen(false)}
@@ -12750,11 +13416,11 @@ export default function App() {
       {/* ── SIDEBAR ── */}
       <aside className="erp-app-sidebar" style={{
         width: narrowNav ? 280 : 220,
-        background:C.sidebar,
         display:"flex",
         flexDirection:"column",
         flexShrink:0,
-        borderRight:`1px solid ${C.sidebarBdr}`,
+        position: "relative",
+        zIndex: 10,
         ...(narrowNav ? {
           position: "fixed",
           left: 0,
@@ -12768,15 +13434,18 @@ export default function App() {
       }}>
 
         {/* Logo */}
-        <div style={{ padding:"22px 20px 16px", borderBottom:`1px solid ${C.sidebarBdr}` }}>
+        <div style={{ padding:"22px 20px 16px", borderBottom:"1px solid rgba(226,232,240,0.4)" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:34, height:34,
-              background:`linear-gradient(135deg, ${C.violet}, ${C.pink})`, borderRadius:9,
-              display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, flexShrink:0 }}>
+            <div style={{ width:36, height:36,
+              background: C.gradient,
+              borderRadius:10,
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, flexShrink:0,
+              boxShadow: `0 8px 20px -6px ${C.violet}55, 0 1px 0 rgba(255,255,255,0.5) inset`,
+            }}>
               <Sparkles size={18} color="#fff" />
             </div>
             <div>
-              <div style={{ color:C.text, fontWeight:800, fontSize:13, lineHeight:1.2 }}>Estética ERP</div>
+              <div style={{ color:C.text, fontWeight:800, fontSize:13, lineHeight:1.2, letterSpacing: "-0.015em" }}>Estética ERP</div>
               <div style={{ color:C.muted, fontSize:10, marginTop:2 }}>Sistema de Gestión</div>
             </div>
           </div>
@@ -12795,12 +13464,25 @@ export default function App() {
                 const Icon = it.icon
                 return (
                   <button key={it.id} type="button" onClick={() => { goToSection(it.id); if (narrowNav) setMobileNavOpen(false) }} style={{
-                    width:"100%", display:"flex", alignItems:"center", gap:10,
-                    padding:"12px 20px", minHeight:44, background: active?"rgba(99, 102, 241, 0.18)":"transparent",
-                    border:"none", borderLeft: active?`3px solid ${C.violet}`:"3px solid transparent",
-                    cursor:"pointer", color: active?C.violet:C.muted,
-                    fontSize:13, fontWeight: active?600:400, textAlign:"left" }}>
-                    <Icon size={16}/> {it.label}
+                    width:"calc(100% - 12px)",
+                    margin: "1px 6px",
+                    display:"flex", alignItems:"center", gap:10,
+                    padding:"11px 14px",
+                    minHeight:44,
+                    background: active
+                      ? "linear-gradient(135deg, rgba(99,102,241,0.18) 0%, rgba(168,85,247,0.12) 100%)"
+                      : "transparent",
+                    border: active ? "1px solid rgba(99,102,241,0.28)" : "1px solid transparent",
+                    borderRadius: 10,
+                    cursor:"pointer",
+                    color: active ? C.violet : C.muted,
+                    fontSize:13, fontWeight: active?700:500,
+                    textAlign:"left",
+                    boxShadow: active ? "0 1px 0 rgba(255,255,255,0.55) inset, 0 4px 12px -3px rgba(99,102,241,0.22)" : "none",
+                    transition: "all .18s",
+                    letterSpacing: "-0.005em",
+                  }}>
+                    <Icon size={16} strokeWidth={active ? 2.4 : 2}/> {it.label}
                   </button>
                 )
               })}
@@ -12809,10 +13491,20 @@ export default function App() {
         </nav>
 
         {/* Active clinic */}
-        <div style={{ padding:"14px 14px", borderTop:`1px solid ${C.sidebarBdr}` }}>
-          <div style={{ background:"rgba(15,23,42,.04)", borderRadius:10, padding:"10px 12px",
-            display:"flex", alignItems:"center", gap:8 }}>
-            <div style={{ width:7, height:7, borderRadius:"50%", background:C.success, flexShrink:0 }}/>
+        <div style={{ padding:"14px 14px", borderTop:"1px solid rgba(226,232,240,0.4)" }}>
+          <div style={{
+            background: "linear-gradient(135deg, rgba(255,255,255,0.55) 0%, rgba(241,245,249,0.35) 100%)",
+            backdropFilter: "blur(10px) saturate(160%)",
+            WebkitBackdropFilter: "blur(10px) saturate(160%)",
+            border: "1px solid rgba(255,255,255,0.5)",
+            borderRadius:12, padding:"10px 12px",
+            display:"flex", alignItems:"center", gap:8,
+            boxShadow: "0 1px 0 rgba(255,255,255,0.6) inset, 0 4px 12px -4px rgba(15,23,42,0.08)",
+          }}>
+            <div style={{
+              width:8, height:8, borderRadius:"50%", background: C.success, flexShrink:0,
+              boxShadow: `0 0 8px ${C.success}`,
+            }}/>
             <div>
               <div style={{ color:C.text, fontWeight:700, fontSize:12 }}>{clinicOptions.find(c => c.id === clinic)?.nombre || `Clínica ${clinic}`}</div>
               <div style={{ color:C.muted, fontSize:10, marginTop:1 }}>Activa · Online</div>
@@ -12822,20 +13514,34 @@ export default function App() {
       </aside>
 
       {/* ── MAIN ── */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0, marginLeft: narrowNav ? 0 : undefined }}>
+      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", minWidth:0, marginLeft: narrowNav ? 0 : undefined, position:"relative", zIndex: 1 }}>
 
         {/* TOP BAR */}
-        <header style={{ background:"#fff", borderBottom:`1px solid ${C.border}`,
+        <header style={{
+          background: "linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.32) 100%)",
+          backdropFilter: "blur(22px) saturate(200%)",
+          WebkitBackdropFilter: "blur(22px) saturate(200%)",
+          borderBottom: "none",
           padding:`${narrowNav ? 8 : 0}px max(14px, env(safe-area-inset-right)) ${narrowNav ? 8 : 0}px max(14px, env(safe-area-inset-left))`,
-          display:"flex", alignItems:"center", gap: narrowNav ? 10 : 14, minHeight:58, flexShrink:0, flexWrap:"wrap" }}>
+          display:"flex", alignItems:"center", gap: narrowNav ? 10 : 14, minHeight:58, flexShrink:0, flexWrap:"wrap",
+          position: "relative",
+          zIndex: 5,
+        }}>
           {narrowNav && (
             <button type="button" onClick={() => setMobileNavOpen(o => !o)} aria-label="Abrir menú"
-              style={{ width:44, height:44, borderRadius:10, border:`1.5px solid ${C.border}`, background:C.subtle, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, order:1 }}>
+              style={{
+                width:44, height:44, borderRadius:10,
+                border:"1px solid rgba(226,232,240,0.6)",
+                background:"rgba(255,255,255,0.6)",
+                backdropFilter:"blur(10px) saturate(160%)",
+                WebkitBackdropFilter:"blur(10px) saturate(160%)",
+                cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, order:1
+              }}>
               <Menu size={20} color={C.text} />
             </button>
           )}
           <div style={{ flex:1, minWidth: narrowNav ? 150 : 0, order:2 }}>
-            <div style={{ fontSize: narrowNav ? 15 : 16, fontWeight:700, color:C.text }}>{titles[section]}</div>
+            <div style={{ fontSize: narrowNav ? 15 : 16, fontWeight:800, color:C.text, letterSpacing: "-0.02em" }}>{titles[section]}</div>
             <div style={{ fontSize:11, color:"#94A3B8", marginTop:1 }}>{fmtDate(TODAY)} · {ROLE_LABEL[role]}</div>
           </div>
 
@@ -12850,12 +13556,20 @@ export default function App() {
                 key={c.id}
                 onClick={() => { if (isGerente) setClinic(c.id) }}
                 style={{
-                  padding:"5px 14px", borderRadius:20, border:"1.5px solid",
+                  padding:"6px 14px", borderRadius:20,
+                  border:"1.5px solid",
                   fontSize:12, fontWeight:600, cursor: isGerente ? "pointer" : "default",
-                  background: clinic===c.id ? C.violet : "transparent",
+                  background: clinic===c.id
+                    ? C.gradient
+                    : "linear-gradient(135deg, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.45) 100%)",
                   color: clinic===c.id ? "#fff" : C.muted,
-                  borderColor: clinic===c.id ? C.violet : C.border,
+                  borderColor: clinic===c.id ? "rgba(255,255,255,0.3)" : "rgba(226,232,240,0.6)",
                   opacity: isGerente ? 1 : 0.95,
+                  backdropFilter: clinic===c.id ? undefined : "blur(10px) saturate(160%)",
+                  WebkitBackdropFilter: clinic===c.id ? undefined : "blur(10px) saturate(160%)",
+                  boxShadow: clinic===c.id
+                    ? `0 1px 0 rgba(255,255,255,0.35) inset, 0 6px 16px -4px ${C.violet}55`
+                    : "0 1px 0 rgba(255,255,255,0.5) inset",
                 }}>
                 {c.nombre}
               </button>
@@ -12868,8 +13582,14 @@ export default function App() {
               {!narrowNav && <div style={{ fontSize:10, color:C.muted }}>{session.user}</div>}
             </div>
             <button type="button" onClick={logout} title="Cerrar sesión"
-              style={{ width:36, height:36, borderRadius:"50%", border:`1.5px solid ${C.border}`,
-                background:C.subtle, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              style={{
+                width:36, height:36, borderRadius:"50%",
+                border:"1.5px solid rgba(226,232,240,0.6)",
+                background:"rgba(255,255,255,0.6)",
+                backdropFilter:"blur(10px) saturate(160%)",
+                WebkitBackdropFilter:"blur(10px) saturate(160%)",
+                cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"
+              }}>
               <LogOut size={16} color={C.muted}/>
             </button>
           </div>

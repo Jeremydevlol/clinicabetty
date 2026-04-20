@@ -692,12 +692,195 @@ Sé lo más preciso posible con las coordenadas.`
 
 /** DeepFace vía Python (face-proportion-overlay/deepface_bridge.py). */
 function deepfaceBridgePlugin() {
+  const python = process.env.PYTHON || 'python3'
+  const requestTimeoutMs = 60000
+  let worker = null
+  let workerStdoutBuf = ''
+  let workerReady = false
+  let workerWarming = false
+  let workerFatal = ''
+  let currentJob = null
+  const queue = []
+  let nextId = 1
+  const pendingById = new Map()
+
+  const failJob = (job, message) => {
+    if (!job) return
+    if (job.timer) clearTimeout(job.timer)
+    job.reject(new Error(message))
+  }
+
+  const failAll = (message) => {
+    if (currentJob) {
+      const j = currentJob
+      currentJob = null
+      failJob(j, message)
+    }
+    for (const j of pendingById.values()) failJob(j, message)
+    pendingById.clear()
+    while (queue.length) failJob(queue.shift(), message)
+  }
+
+  const resolveJob = (job, payload) => {
+    if (!job) return
+    if (job.timer) clearTimeout(job.timer)
+    job.resolve(payload)
+  }
+
+  const spawnWorker = () => {
+    if (worker) return worker
+    workerStdoutBuf = ''
+    workerReady = false
+    workerWarming = false
+    workerFatal = ''
+    try {
+      worker = spawn(python, [DEEPFACE_BRIDGE_SCRIPT, '--serve'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env },
+      })
+    } catch (e) {
+      workerFatal = `No se pudo ejecutar Python (${python}): ${String(e?.message || e)}`
+      worker = null
+      return null
+    }
+    worker.stderr.on('data', (d) => {
+      const s = d.toString()
+      if (s.includes('[deepface_bridge]')) process.stderr.write(s)
+    })
+    worker.stdout.on('data', (chunk) => {
+      workerStdoutBuf += chunk.toString()
+      const lines = workerStdoutBuf.split('\n')
+      workerStdoutBuf = lines.pop() || ''
+      for (const line of lines) {
+        const raw = line.trim()
+        if (!raw) continue
+        let j
+        try { j = JSON.parse(raw) } catch {
+          if (currentJob) {
+            const job = currentJob
+            currentJob = null
+            failJob(job, 'Respuesta inválida del análisis DeepFace')
+          }
+          continue
+        }
+        if (j && typeof j === 'object' && j.event) {
+          if (j.event === 'starting') { workerReady = false; workerWarming = false; continue }
+          if (j.event === 'ready') {
+            workerReady = true
+            workerWarming = !!j.warming
+            if (!workerWarming) pump()
+            continue
+          }
+          if (j.event === 'fatal') {
+            workerFatal = String(j.error || 'DeepFace fatal')
+            failAll(workerFatal)
+            try { worker?.kill('SIGKILL') } catch { /* ignore */ }
+            worker = null
+            continue
+          }
+          continue
+        }
+        let job = null
+        if (j && typeof j === 'object' && j.id != null && pendingById.has(j.id)) {
+          job = pendingById.get(j.id)
+          pendingById.delete(j.id)
+          if (currentJob === job) currentJob = null
+        } else if (currentJob) {
+          job = currentJob
+          currentJob = null
+        }
+        if (!job) continue
+        if (j?.ok === false) failJob(job, j.error || 'DeepFace error')
+        else resolveJob(job, j)
+      }
+      pump()
+    })
+    worker.on('error', (e) => {
+      workerFatal = `No se pudo ejecutar Python (${python}). Instalá Python 3 o definí PYTHON en .env.local. ${e}`
+      worker = null
+      workerReady = false
+      failAll(workerFatal)
+    })
+    worker.on('close', (code) => {
+      const msg = code === 0
+        ? 'Proceso DeepFace finalizado'
+        : `El proceso Python DeepFace terminó con código ${code}`
+      worker = null
+      workerReady = false
+      workerWarming = false
+      failAll(msg)
+    })
+    return worker
+  }
+
+  const pump = () => {
+    if (currentJob || queue.length === 0) return
+    const proc = spawnWorker()
+    if (!proc) {
+      failAll(workerFatal || 'DeepFace no disponible')
+      return
+    }
+    if (!workerReady || workerWarming) return
+    if (!proc.stdin || proc.stdin.destroyed) {
+      failAll('DeepFace no disponible: stdin del worker cerrado')
+      return
+    }
+    const job = queue.shift()
+    currentJob = job
+    const id = nextId++
+    job.id = id
+    pendingById.set(id, job)
+    job.timer = setTimeout(() => {
+      if (pendingById.get(id) === job) pendingById.delete(id)
+      if (currentJob === job) currentJob = null
+      failJob(job, 'DeepFace demoró demasiado en responder')
+      pump()
+    }, requestTimeoutMs)
+    try {
+      proc.stdin.write(`${JSON.stringify({ id, image_base64: job.b64 })}\n`)
+    } catch (e) {
+      pendingById.delete(id)
+      if (currentJob === job) currentJob = null
+      failJob(job, `No se pudo enviar imagen al worker DeepFace: ${String(e?.message || e)}`)
+      pump()
+    }
+  }
+
+  const analyze = (b64) => new Promise((resolve, reject) => {
+    queue.push({ b64, resolve, reject, timer: null, id: null })
+    pump()
+  })
+
+  const status = () => ({
+    ok: !workerFatal,
+    running: !!worker,
+    ready: workerReady && !workerWarming,
+    warming: workerWarming,
+    pending: pendingById.size,
+    queued: queue.length,
+    error: workerFatal || undefined,
+  })
+
+  const ensureStarted = () => {
+    if (!worker && !workerFatal) spawnWorker()
+  }
+
   const mount = (server) => {
+    // Arranca Python ni bien inicia el dev server: los modelos se cargan en background.
+    ensureStarted()
+
+    server.middlewares.use('/api/deepface/status', (req, res, next) => {
+      if (req.method !== 'GET') return next()
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.statusCode = 200
+      res.end(JSON.stringify(status()))
+    })
+
     server.middlewares.use('/api/deepface', (req, res, next) => {
       if (req.method !== 'POST') return next()
       const chunks = []
       req.on('data', (c) => { chunks.push(c) })
-      req.on('end', () => {
+      req.on('end', async () => {
         res.setHeader('Content-Type', 'application/json; charset=utf-8')
         let body
         try {
@@ -711,57 +894,168 @@ function deepfaceBridgePlugin() {
           res.statusCode = 400
           return res.end(JSON.stringify({ error: 'image_base64 vacío' }))
         }
-        const python = process.env.PYTHON || 'python3'
-        const proc = spawn(python, [DEEPFACE_BRIDGE_SCRIPT], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env },
-        })
-        const timeoutMs = 120000
-        const t = setTimeout(() => {
-          proc.kill('SIGKILL')
-        }, timeoutMs)
-        let out = ''
-        let err = ''
-        proc.stdout.on('data', (d) => { out += d.toString() })
-        proc.stderr.on('data', (d) => { err += d.toString() })
-        proc.on('error', (e) => {
-          clearTimeout(t)
-          res.statusCode = 503
-          res.end(JSON.stringify({
-            error: `No se pudo ejecutar Python (${python}). Instalá Python 3 o definí PYTHON en .env.local. ${e}`,
-          }))
-        })
-        proc.on('close', (code) => {
-          clearTimeout(t)
-          if (code !== 0 && !out.trim()) {
-            res.statusCode = 500
-            return res.end(JSON.stringify({
-              error: err || `El proceso Python terminó con código ${code}`,
-            }))
-          }
-          try {
-            const j = JSON.parse(out.trim())
-            if (j.ok === false) {
-              res.statusCode = 500
-              return res.end(JSON.stringify({ ok: false, error: j.error || 'DeepFace error' }))
-            }
-            res.statusCode = 200
-            return res.end(JSON.stringify(j))
-          } catch {
-            res.statusCode = 502
-            res.end(JSON.stringify({
-              error: 'Respuesta inválida del análisis DeepFace',
-              detail: err || out.slice(0, 500),
-            }))
-          }
-        })
-        proc.stdin.write(JSON.stringify({ image_base64: b64 }))
-        proc.stdin.end()
+        try {
+          const j = await analyze(b64)
+          res.statusCode = 200
+          return res.end(JSON.stringify(j))
+        } catch (e) {
+          res.statusCode = 500
+          return res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
+        }
       })
+    })
+    server.httpServer?.on?.('close', () => {
+      try { worker?.kill('SIGKILL') } catch { /* ignore */ }
+      worker = null
+      failAll('Worker DeepFace cerrado')
     })
   }
   return {
     name: 'deepface-bridge',
+    configureServer: mount,
+    configurePreviewServer: mount,
+    api: { analyze, status, ensureStarted },
+  }
+}
+
+/**
+ * Combina DeepFace (local) + OpenAI Vision → análisis clínico-estético.
+ * Requiere deepfacePlugin (para reusar su worker Python) y la clave OpenAI.
+ */
+function faceAnalysisFullPlugin(openaiKey, deepfacePlugin) {
+  const buildSystemPrompt = () => (
+    `Eres asistente clínico-estético para una clínica médico-estética (España). Análisis asistido por IA de una fotografía de rostro.
+Recibes una imagen del paciente y datos objetivos obtenidos con DeepFace (edad estimada, emoción, etc). Devuelve SOLO un JSON válido con esta forma exacta:
+{
+  "tipoPiel": "seca|mixta|grasa|sensible|madura|normal|indeterminada",
+  "fototipo": "I|II|III|IV|V|VI|indeterminado",
+  "hidratacion": "baja|media|alta|indeterminada",
+  "luminosidad": "apagada|normal|radiante|indeterminada",
+  "simetria": "string (descripción breve en español)",
+  "arrugas": ["string"],
+  "manchas": "string",
+  "porosYTextura": "string",
+  "ojeras": "string",
+  "flacidez": "string",
+  "observacionesClinicas": "string",
+  "recomendaciones": ["string"],
+  "alertas": ["string"],
+  "disclaimer": "Análisis estético asistido por IA; no reemplaza valoración médica presencial."
+}
+Reglas:
+- Español (España), tono clínico y claro.
+- Describe SOLO lo que sea observable en la foto; si algo no se puede determinar, pon "indeterminada" / "indeterminado" o cadena vacía.
+- Recomendaciones: 3 a 6 ítems breves (rutina cosmética, tratamientos sugeridos, cuidados). No recetes fármacos ni dosis.
+- Alertas: lesiones sospechosas, asimetrías marcadas, signos que ameriten derivación (si aplica).
+- No inventes la edad; usá la edad aportada por DeepFace como contexto.
+- NUNCA devuelvas texto fuera del JSON.`
+  )
+
+  const callOpenAiVision = async (imageB64, deepfaceData) => {
+    if (!openaiKey) throw new Error('Falta OPENAI_API_KEY en el servidor')
+    const df = deepfaceData || {}
+    const ctx = JSON.stringify({
+      edad: df.age,
+      genero: df.dominant_gender,
+      emocion: df.dominant_emotion,
+      etnia: df.dominant_race,
+      face_confidence: df.face_confidence,
+    })
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: buildSystemPrompt() },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: `Datos DeepFace (contexto objetivo): ${ctx}. Analizá el rostro de la imagen.` },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageB64}`, detail: 'low' } },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 900,
+        temperature: 0.2,
+      }),
+    })
+    const text = await resp.text()
+    if (!resp.ok) {
+      let detail = text
+      try { detail = JSON.parse(text)?.error?.message || text } catch { /* keep raw */ }
+      throw new Error(`OpenAI Vision: ${detail}`)
+    }
+    let parsed
+    try { parsed = JSON.parse(text) } catch { throw new Error('Respuesta inválida de OpenAI') }
+    const content = parsed?.choices?.[0]?.message?.content || ''
+    try { return JSON.parse(content) } catch { throw new Error('El modelo no devolvió JSON válido') }
+  }
+
+  const mount = (server) => {
+    server.middlewares.use('/api/face-analysis/full', (req, res, next) => {
+      if (req.method !== 'POST') return next()
+      const chunks = []
+      req.on('data', c => chunks.push(c))
+      req.on('end', async () => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          const b64 = (body.image_base64 || '').trim()
+          if (!b64) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ ok: false, error: 'image_base64 vacío' }))
+          }
+          const includeAi = body.includeAi !== false
+          const deepfaceApi = deepfacePlugin?.api
+          if (!deepfaceApi?.analyze) {
+            res.statusCode = 500
+            return res.end(JSON.stringify({ ok: false, error: 'DeepFace no disponible en el servidor' }))
+          }
+          let df = null
+          let dfError = null
+          try {
+            df = await deepfaceApi.analyze(b64)
+          } catch (e) {
+            dfError = String(e?.message || e)
+          }
+          if (!df || df.face_found === false) {
+            res.statusCode = 200
+            return res.end(JSON.stringify({
+              ok: true,
+              face_found: false,
+              deepface: df || null,
+              deepfaceError: dfError,
+            }))
+          }
+          let clinico = null
+          let clinicoError = null
+          if (includeAi) {
+            try { clinico = await callOpenAiVision(b64, df) }
+            catch (e) { clinicoError = String(e?.message || e) }
+          }
+          res.statusCode = 200
+          res.end(JSON.stringify({
+            ok: true,
+            face_found: true,
+            deepface: df,
+            deepfaceError: dfError,
+            clinico,
+            clinicoError,
+          }))
+        } catch (e) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
+        }
+      })
+    })
+  }
+  return {
+    name: 'face-analysis-full',
     configureServer: mount,
     configurePreviewServer: mount,
   }
@@ -2168,7 +2462,10 @@ export default defineConfig(({ mode }) => {
       ...(devHttps ? [basicSsl()] : []),
       erpStateSyncPlugin(),
       openaiProxiesPlugin(openaiKey),
-      deepfaceBridgePlugin(),
+      ...(function () {
+        const dfPlugin = deepfaceBridgePlugin()
+        return [dfPlugin, faceAnalysisFullPlugin(openaiKey, dfPlugin)]
+      })(),
       erpOperationsPlugin(supabaseUrl, supabaseServiceRole),
       mediaUploadPlugin(supabaseUrl, supabaseServiceRole),
       adminCreateStaffPlugin(supabaseUrl, supabaseServiceRole),
