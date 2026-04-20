@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://clinica-erp-backend.onrender.com/api/:path*"
+      "destination": "https://clinicabetty-1.onrender.com/api/:path*"
     },
     {
       "source": "/((?!api/|assets/|favicon\\.ico|robots\\.txt|.*\\.(?:js|css|map|json|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|eot|wasm|pdf|mp4|webm)).*)",
