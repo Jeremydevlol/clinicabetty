@@ -10796,6 +10796,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const borradorSesionListoRef = useRef(false)
   /** true si el borrador restauró servicios — evita que el efecto del servicio por defecto los pise. */
   const serviciosRestauradosRef = useRef(false)
+  /** Persiste qtyBase del bump-effect fuera del estado React — sobrevive refreshes de Supabase Realtime. */
+  const consumoBaseDocRef = useRef({})
   const [finalizando, setFinalizando] = useState(false)
   const [askExtrasOpen, setAskExtrasOpen] = useState(false)
   const [allowFinalizeWithoutExtras, setAllowFinalizeWithoutExtras] = useState(false)
@@ -11146,6 +11148,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         },
       },
     }))
+    // Persistir en ref para que finalizar() lo lea aunque Realtime haya refrescado el estado
+    consumoBaseDocRef.current[turnoId] = qtyBase
   }, [turno?.id, turno?.estado, clinicId, turnoId, setData, narrow, data.servicios, onConsentSaved])
 
   const detenerCamara = (opts = {}) => {
@@ -12810,7 +12814,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           return
         }
         const turnoActualDb = data.clinics[clinicId].turnos.find(t => t.id === turnoId) || turno
-        const qtyBaseDb = turnoActualDb?.consumoBaseStock || {}
+        const qtyBaseDb = consumoBaseDocRef.current[turnoId] || turnoActualDb?.consumoBaseStock || {}
         // Use real quantities for base materials in the log
         const qtyForLogDb = { ...qty }
         for (const [k, baseAmt] of Object.entries(qtyBaseDb)) {
@@ -15726,6 +15730,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
   const [askExtrasOpen, setAskExtrasOpen] = useState(false)
   const [allowFinalizeWithoutExtras, setAllowFinalizeWithoutExtras] = useState(false)
   const [salaTrabajoActiva, setSalaTrabajoActiva] = useState("")
+  /** Persiste qtyBase por turnoId fuera del estado de React — sobrevive refreshes de Supabase Realtime. */
+  const consumoBaseMapRef = useRef({})
 
   const stock = data.clinics[clinic]?.stock || []
   const turnos = (data.clinics[clinic]?.turnos || []).filter(t => t.fecha === TODAY && (t.estado === "en_sala" || t.estado === "en_curso"))
@@ -15787,6 +15793,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           },
         },
       }))
+      // Guardar qtyBase en ref para que finalizar() lo lea aunque Realtime haya refrescado el estado
+      consumoBaseMapRef.current[turno.id] = qtyBase
       // No abre modal — el paciente pasa a "En atención" y el especialista abre la orden cuando termine
     } catch (e) {
       alert("Error al iniciar la atención: " + (e?.message || e))
@@ -15836,7 +15844,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           return
         }
         const turnoActualDb = data.clinics[clinic].turnos.find(t => t.id === turno.id) || turno
-        const qtyBaseDb = turnoActualDb?.consumoBaseStock || {}
+        // Usar ref primero (sobrevive Realtime refresh) → local state → {}
+        const qtyBaseDb = consumoBaseMapRef.current[turno.id] || turnoActualDb?.consumoBaseStock || {}
         const qtyTotalDb = mergeQtyMaps(qtyBaseDb, qty)
         const detalleInsumos = Object.entries(qtyTotalDb).map(([k, v]) => {
           const s = (data.clinics[clinic]?.stock || []).find(x => x.id === +k)
@@ -15844,12 +15853,28 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
         }).filter(x => x.qty > 0)
         const montoInsumos = detalleInsumos.reduce((a, x) => a + x.costoUnit * x.qty, 0)
         const montoServicio = srv?.precio || 0
-        await supabase.from("alertas_cobro").update({
+        const alertaPayload = {
           monto_servicio: montoServicio,
           monto_insumos: montoInsumos,
           monto_total: montoServicio + montoInsumos,
           insumos: detalleInsumos,
-        }).eq("turno_id", turno.id)
+        }
+        // El trigger DB crea la fila; UPDATE la enriquece. Si el trigger aún no corrió (race),
+        // reintentar con upsert por turno_id usando select para verificar.
+        const { data: updAlerta } = await supabase.from("alertas_cobro")
+          .update(alertaPayload).eq("turno_id", turno.id).select("id")
+        if (!updAlerta || updAlerta.length === 0) {
+          // El trigger no creó la fila todavía — insertar manualmente
+          await supabase.from("alertas_cobro").upsert({
+            clinic_id: turno.clinicId ?? clinic,
+            turno_id: turno.id,
+            cliente: turno.cliente || "",
+            servicio: srv?.nombre || turno.servicio || "",
+            servicio_id: sid,
+            ...alertaPayload,
+            estado: "pendiente",
+          }, { onConflict: "turno_id", ignoreDuplicates: false })
+        }
         const pacienteIdFinal = ensPostAtencion.clienteId || turno.pacienteId
         if (pacienteIdFinal) {
           const nombresFact = srv?.nombre || turno.servicio || "Servicio"
@@ -15890,6 +15915,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           }
         }
         await sincronizarAlertaCobroDesdeDb(setData, turno.id)
+        // Limpiar ref del turno ya finalizado
+        delete consumoBaseMapRef.current[turno.id]
         const deltaStock = calcularDeltaStockAtencion({
           qtyBaseInicial: qtyBaseDb,
           qtyPlanificado: qtyMapFromMaterialesServicio(srv),
