@@ -15722,6 +15722,7 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
   const [notas, setNotas] = useState("")
   const [qty, setQty] = useState({})
   const [finalizando, setFinalizando] = useState(false)
+  const [iniciandoId, setIniciandoId] = useState(null)
   const [askExtrasOpen, setAskExtrasOpen] = useState(false)
   const [allowFinalizeWithoutExtras, setAllowFinalizeWithoutExtras] = useState(false)
   const [salaTrabajoActiva, setSalaTrabajoActiva] = useState("")
@@ -15742,54 +15743,56 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
   const srvPreview = servicioSel ? data.servicios.find(s => s.id === servicioSel) : null
 
   const iniciar = async turno => {
-    const sid = defaultServicioId(turno)
-    const srv = data.servicios.find(s => s.id === sid)
-    const qtyBase = qtyMapFromMaterialesServicio(srv)
-    const salaAsignada = getSalaTrabajoTurno(turno) || "Sala 1"
-    if (import.meta.env.VITE_SUPABASE_URL) {
-      const { error } = await supabase.from("turnos").update({
-        estado: "en_curso",
-        sesion_iniciada_desde: "sala",
-        obs: upsertSalaTrabajoEnObs(turno.obs, salaAsignada),
-      }).eq("id", turno.id)
-      if (error) {
-        alert(error.message || "No se pudo iniciar la sesión.")
-        return
+    setIniciandoId(turno.id)
+    try {
+      const sid = defaultServicioId(turno)
+      const srv = data.servicios.find(s => s.id === sid)
+      const qtyBase = qtyMapFromMaterialesServicio(srv)
+      const salaAsignada = getSalaTrabajoTurno(turno) || "Sala 1"
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { error } = await supabase.from("turnos").update({
+          estado: "en_curso",
+          sesion_iniciada_desde: "sala",
+          obs: upsertSalaTrabajoEnObs(turno.obs, salaAsignada),
+        }).eq("id", turno.id)
+        if (error) {
+          alert(error.message || "No se pudo iniciar la atención.")
+          return
+        }
+        if (Object.keys(qtyBase).length) {
+          const resStock = await persistirDeltaStockEnSupabase({ clinic, stockList: stock, deltaMap: qtyBase })
+          if (!resStock.ok) console.warn("No se pudo descontar stock base:", resStock.error)
+        }
       }
-      if (Object.keys(qtyBase).length) {
-        const resStock = await persistirDeltaStockEnSupabase({ clinic, stockList: stock, deltaMap: qtyBase })
-        if (!resStock.ok) alert("Sesión iniciada, pero no se pudo descontar el stock en BD: " + (resStock.error || ""))
-      }
-    }
-    setData(d => ({
-      ...d,
-      clinics: {
-        ...d.clinics,
-        [clinic]: {
-          ...d.clinics[clinic],
-          stock: d.clinics[clinic].stock.map(p => {
-            const c = qtyBase[p.id] || 0
-            if (c <= 0) return p
-            return { ...p, stock: Math.max(0, (+p.stock || 0) - c) }
-          }),
-          turnos: d.clinics[clinic].turnos.map(t => t.id === turno.id ? {
-            ...t,
-            estado: "en_curso",
-            sesionIniciadaDesde: "sala",
-            sesionIniciadaAt: new Date().toISOString(),
-            consumoBaseStock: qtyBase,
-            salaTrabajo: salaAsignada,
-            obs: upsertSalaTrabajoEnObs(t.obs, salaAsignada),
-          } : t),
+      setData(d => ({
+        ...d,
+        clinics: {
+          ...d.clinics,
+          [clinic]: {
+            ...d.clinics[clinic],
+            stock: d.clinics[clinic].stock.map(p => {
+              const c = qtyBase[p.id] || 0
+              if (c <= 0) return p
+              return { ...p, stock: Math.max(0, (+p.stock || 0) - c) }
+            }),
+            turnos: d.clinics[clinic].turnos.map(t => t.id === turno.id ? {
+              ...t,
+              estado: "en_curso",
+              sesionIniciadaDesde: "sala",
+              sesionIniciadaAt: new Date().toISOString(),
+              consumoBaseStock: qtyBase,
+              salaTrabajo: salaAsignada,
+              obs: upsertSalaTrabajoEnObs(t.obs, salaAsignada),
+            } : t),
+          },
         },
-      },
-    }))
-    setActivo({ ...turno, estado: "en_curso", salaTrabajo: salaAsignada, obs: upsertSalaTrabajoEnObs(turno.obs, salaAsignada) })
-    setSalaTrabajoActiva(salaAsignada)
-    setServicioSel(sid)
-    setProtocolo("")
-    setNotas("")
-    setQty({})
+      }))
+      // No abre modal — el paciente pasa a "En atención" y el especialista abre la orden cuando termine
+    } catch (e) {
+      alert("Error al iniciar la atención: " + (e?.message || e))
+    } finally {
+      setIniciandoId(null)
+    }
   }
 
   const setQ = (stockId, v) => {
@@ -15798,7 +15801,9 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
   }
 
   const finalizar = async () => {
-    if (!activo || !protocolo.trim() || !servicioSel) return
+    if (!activo) return
+    if (!servicioSel) { alert("Seleccioná el servicio a facturar."); return }
+    if (!protocolo.trim()) { alert("Escribí el protocolo aplicado antes de finalizar."); return }
     const turno = activo
     const sid = servicioSel
     const extrasTotal = Object.values(qty || {}).reduce((a, n) => a + (Math.max(0, +n || 0)), 0)
@@ -15932,6 +15937,9 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
       setNotas("")
       setQty({})
       if (onPersist) await onPersist()
+    } catch (e) {
+      console.error("finalizar sala:", e)
+      alert("No se pudo finalizar la sesión: " + (e?.message || e) + "\n\nEl avance está guardado. Revisá la conexión e intentá de nuevo.")
     } finally {
       setAllowFinalizeWithoutExtras(false)
       setFinalizando(false)
@@ -16035,8 +16043,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
                     )}
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    <Btn onClick={() => void iniciar(t)} style={{ width: "100%", justifyContent: "center", minHeight: 40 }}>
-                      <MonitorPlay size={14}/> Iniciar atención
+                    <Btn onClick={() => void iniciar(t)} disabled={iniciandoId === t.id} style={{ width: "100%", justifyContent: "center", minHeight: 40 }}>
+                      {iniciandoId === t.id ? <><Loader2 size={14} className="erp-spin"/> Iniciando…</> : <><MonitorPlay size={14}/> Iniciar atención</>}
                     </Btn>
                   </div>
                 </div>
@@ -16106,22 +16114,34 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
         </div>
       )}
 
-      <Modal open={!!activo} onClose={() => { setActivo(null); setServicioSel(null) }} title={activo ? `Ficha de sesión — ${activo.cliente}` : ""}
+      <Modal open={!!activo} onClose={() => { setActivo(null); setServicioSel(null) }} title={activo ? `Orden de servicio — ${activo.cliente}` : ""}
         footer={<>
-          <Btn variant="outline" onClick={() => { setActivo(null); setServicioSel(null) }}>Cancelar</Btn>
-          <Btn onClick={() => void finalizar()} disabled={finalizando || noServicios || !servicioSel}>{finalizando ? "Enviando..." : "Finalizar sesión"}</Btn>
+          <Btn variant="outline" onClick={() => { setActivo(null); setServicioSel(null) }}>Cerrar</Btn>
+          <Btn onClick={() => void finalizar()} disabled={finalizando || noServicios || !servicioSel || !protocolo.trim()}>
+            {finalizando ? <><Loader2 size={14} className="erp-spin"/> Enviando…</> : "Enviar a recepción"}
+          </Btn>
         </>}>
         {activo && (
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-            <FG label="Servicio a facturar (va a recepción)" full>
+
+            {/* Info del turno */}
+            <div style={{ background:"#F8FAFC", borderRadius:10, padding:"10px 14px", fontSize:13, color:C.muted, display:"flex", gap:16, flexWrap:"wrap" }}>
+              <span>🕐 <strong style={{ color:C.text }}>{activo.hora}</strong></span>
+              <span>💆 <strong style={{ color:C.text }}>{activo.servicio || "—"}</strong></span>
+              <span>👤 <strong style={{ color:C.text }}>{profs.find(p => p.id === activo.profesionalId)?.nombre || "—"}</strong></span>
+            </div>
+
+            <FG label="Servicio a facturar *" full>
               <select style={inp} value={servicioSel ?? ""} onChange={e => setServicioSel(+e.target.value)}>
-                {noServicios && <option value="">No hay servicios cargados</option>}
+                {noServicios && <option value="">No hay servicios cargados — añadí en «Servicios»</option>}
+                {!noServicios && <option value="">Seleccioná el servicio…</option>}
                 {data.servicios.map(s => (
                   <option key={s.id} value={s.id}>{s.nombre} — {fmt(s.precio)} · {catLabel[s.cat]}</option>
                 ))}
               </select>
             </FG>
-            <FG label="Centro / sala de trabajo" full>
+
+            <FG label="Sala / box de trabajo" full>
               <input
                 style={inp}
                 value={salaTrabajoActiva}
@@ -16147,33 +16167,58 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
                 placeholder="Ej: Sala 2, Box Láser, Consultorio A"
               />
             </FG>
-            {noServicios && <div style={{ fontSize:12, color:C.muted }}>Cargá servicios en `Servicios` para finalizar la sesión.</div>}
-            {srvPreview && (
-              <div style={{ fontSize:13, padding:"10px 12px", background:C.subtle, borderRadius:10, border:`1px solid ${C.border}` }}>
-                <strong>Total servicio (lista):</strong> {fmt(srvPreview.precio)} · Se sumarán los consumibles abajo para el total a cobrar.
-              </div>
-            )}
-            <FG label="Protocolo aplicado" full>
-              <textarea style={{ ...inp, minHeight:72 }} value={protocolo} onChange={e => setProtocolo(e.target.value)} placeholder="Ej: Bótox glabela + patas de gallo — 12 U" />
+
+            <FG label="Protocolo aplicado * (obligatorio para finalizar)" full>
+              <textarea
+                style={{ ...inp, minHeight:80, borderColor: protocolo.trim() ? C.border : "#FCA5A5", background: protocolo.trim() ? "#fff" : "#FFF5F5" }}
+                value={protocolo}
+                onChange={e => setProtocolo(e.target.value)}
+                placeholder="Ej: Bótox glabela + patas de gallo — 12 U Bocouture, profundidad 2 mm"
+              />
+              {!protocolo.trim() && <div style={{ fontSize:11, color:"#DC2626", marginTop:4 }}>Escribí el protocolo aplicado para poder enviar a recepción.</div>}
             </FG>
+
             <div>
-              <div style={{ fontSize:11, fontWeight:700, color:C.muted, marginBottom:8 }}>PRODUCTOS EXTRA (stock C{clinic})</div>
+              <div style={{ fontSize:11, fontWeight:700, color:C.muted, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.05em" }}>Consumibles extra usados</div>
               <div style={{ maxHeight:220, overflowY:"auto", border:`1px solid ${C.border}`, borderRadius:10, padding:10 }}>
+                {stock.length === 0 && <div style={{ fontSize:12, color:C.muted, textAlign:"center", padding:12 }}>Sin stock cargado en esta clínica.</div>}
                 {stock.map(s => (
                   <div key={s.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 4px", borderBottom:`1px solid ${C.subtle}`, fontSize:13 }}>
                     <div>
                       <strong>{s.nombre}</strong>
-                      <span style={{ color:C.muted, fontSize:11, marginLeft:8 }}>Stock {s.stock} {s.unidad} · {fmt(s.costo)} c/u</span>
+                      <span style={{ color:C.muted, fontSize:11, marginLeft:8 }}>{s.stock} {s.unidad} disponibles · {fmt(s.costo)} c/u</span>
                     </div>
                     <input type="number" min={0} style={{ width:72, ...inp, padding:"6px 8px" }} value={qty[s.id] ?? 0} onChange={e => setQ(s.id, e.target.value)} />
                   </div>
                 ))}
               </div>
             </div>
+
             <FG label="Notas clínicas" full>
-              <textarea style={{ ...inp, minHeight:64 }} value={notas} onChange={e => setNotas(e.target.value)} placeholder="Evolución, observaciones…" />
+              <textarea style={{ ...inp, minHeight:60 }} value={notas} onChange={e => setNotas(e.target.value)} placeholder="Evolución, reacciones, observaciones…" />
             </FG>
-            <p style={{ fontSize:11, color:C.muted }}>Centro actual: {salaTrabajoActiva || "Sin definir"} · los materiales base se descuentan al iniciar; acá cargás solo extras.</p>
+
+            {/* Resumen de cobro */}
+            {srvPreview && (
+              <div style={{ background:"linear-gradient(135deg,#F5F3FF,#EDE9FE)", borderRadius:12, padding:"12px 16px", border:"1px solid #DDD6FE" }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.violet, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.05em" }}>Resumen para recepción</div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:3 }}>
+                  <span style={{ color:C.muted }}>Servicio</span>
+                  <span style={{ fontWeight:700 }}>{fmt(srvPreview.precio)}</span>
+                </div>
+                {Object.entries(qty).some(([,v]) => v > 0) && (
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:3 }}>
+                    <span style={{ color:C.muted }}>Consumibles extra</span>
+                    <span style={{ fontWeight:700 }}>{fmt(Object.entries(qty).reduce((a,[k,v]) => { const s = stock.find(x => x.id === +k); return a + (s?.costo || 0) * (+v || 0) }, 0))}</span>
+                  </div>
+                )}
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:15, fontWeight:800, color:C.violet, borderTop:`1px solid #DDD6FE`, paddingTop:6, marginTop:4 }}>
+                  <span>Total estimado</span>
+                  <span>{fmt(srvPreview.precio + Object.entries(qty).reduce((a,[k,v]) => { const s = stock.find(x => x.id === +k); return a + (s?.costo || 0) * (+v || 0) }, 0))}</span>
+                </div>
+                <div style={{ fontSize:11, color:C.muted, marginTop:4 }}>Los materiales base del servicio ya se descontaron al iniciar la atención.</div>
+              </div>
+            )}
           </div>
         )}
       </Modal>
