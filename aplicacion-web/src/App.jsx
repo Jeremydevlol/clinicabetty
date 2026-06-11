@@ -12,7 +12,7 @@ import {
   CreditCard, Gift, Globe, BarChart3, ShoppingCart, Bell, MonitorPlay, QrCode, Copy, Menu, Smartphone,
   Banknote, Wallet, Delete, Minus, Mic, Loader2, Camera, ScanLine, Square,
   CheckCircle2, Building2, Settings, UserPlus, Pencil, Eraser, Undo2, RotateCcw, Link2, ImagePlus,
-  ChevronRight, ChevronLeft, ClipboardCheck, Activity, Send, Target, UserCheck,
+  ChevronRight, ChevronLeft, ClipboardCheck, Activity, Send, Target, UserCheck, Clock,
 } from "lucide-react"
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -10920,6 +10920,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       if (b.fotoSesionFase === "antes" || b.fotoSesionFase === "despues") setFotoSesionFase(b.fotoSesionFase)
       if (typeof b.despuesTripleCompleto === "boolean") setDespuesTripleCompleto(b.despuesTripleCompleto)
       if (typeof b.textoResultado === "string") setTextoResultado(b.textoResultado)
+      if (b.consumoBaseStock && typeof b.consumoBaseStock === "object") consumoBaseDocRef.current[turnoId] = b.consumoBaseStock
       const validF = ["checkin", "veredicto", "propuesta_ia", "registro", "resultado", "evaluacion", "orden"]
       if (typeof b.wizardFase === "string" && validF.includes(b.wizardFase)) setWizardFase(b.wizardFase)
     }
@@ -12724,6 +12725,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       fotoSesionFase,
       despuesTripleCompleto,
       textoResultado,
+      consumoBaseStock: consumoBaseDocRef.current[turnoId] || turno?.consumoBaseStock || null,
       updatedAt: new Date().toISOString(),
     }),
     [
@@ -12814,7 +12816,11 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           return
         }
         const turnoActualDb = data.clinics[clinicId].turnos.find(t => t.id === turnoId) || turno
-        const qtyBaseDb = consumoBaseDocRef.current[turnoId] || turnoActualDb?.consumoBaseStock || {}
+        // ref (sobrevive Realtime) → estado local → borrador JSONB (sobrevive recarga de página) → {}
+        const qtyBaseDb = consumoBaseDocRef.current[turnoId]
+          || turnoActualDb?.consumoBaseStock
+          || turnoActualDb?.sesionMedicaBorrador?.consumoBaseStock
+          || {}
         // Use real quantities for base materials in the log
         const qtyForLogDb = { ...qty }
         for (const [k, baseAmt] of Object.entries(qtyBaseDb)) {
@@ -15733,6 +15739,36 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
   /** Persiste qtyBase por turnoId fuera del estado de React — sobrevive refreshes de Supabase Realtime. */
   const consumoBaseMapRef = useRef({})
 
+  // Autoguardado del borrador de la orden (cada 1,2 s mientras el modal está abierto):
+  // si se recarga la página o se cae la conexión, el protocolo/extras escritos no se pierden.
+  useEffect(() => {
+    if (!activo || !import.meta.env.VITE_SUPABASE_URL) return
+    const t = setTimeout(() => {
+      const prev = (data.clinics[clinic]?.turnos || []).find(x => x.id === activo.id)?.sesionMedicaBorrador || {}
+      const payload = {
+        ...prev,
+        sala: {
+          ...(prev.sala || {}),
+          draft: { servicioSel, protocolo, notas, qty, salaTrabajo: salaTrabajoActiva, updatedAt: new Date().toISOString() },
+        },
+      }
+      void supabase.from("turnos").update({ sesion_medica_borrador: payload }).eq("id", activo.id)
+    }, 1200)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activo?.id, servicioSel, protocolo, notas, qty, salaTrabajoActiva])
+
+  /** Abre el modal de orden restaurando el borrador guardado si existe. */
+  const abrirOrden = t => {
+    const draft = t.sesionMedicaBorrador?.sala?.draft
+    setActivo(t)
+    setSalaTrabajoActiva(draft?.salaTrabajo || getSalaTrabajoTurno(t) || "Sala 1")
+    setServicioSel(draft?.servicioSel ?? defaultServicioId(t))
+    setProtocolo(draft?.protocolo || "")
+    setNotas(draft?.notas || "")
+    setQty(draft?.qty && typeof draft.qty === "object" ? draft.qty : {})
+  }
+
   const stock = data.clinics[clinic]?.stock || []
   const turnos = (data.clinics[clinic]?.turnos || []).filter(t => t.fecha === TODAY && (t.estado === "en_sala" || t.estado === "en_curso"))
   const lista = profFiltro == null ? turnos : turnos.filter(t => (t.profesionalId || 1) === profFiltro)
@@ -15755,11 +15791,17 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
       const srv = data.servicios.find(s => s.id === sid)
       const qtyBase = qtyMapFromMaterialesServicio(srv)
       const salaAsignada = getSalaTrabajoTurno(turno) || "Sala 1"
+      // consumoBaseStock va al borrador JSONB: sobrevive recargas de página, no solo refreshes de Realtime
+      const borradorSala = {
+        ...(turno.sesionMedicaBorrador || {}),
+        sala: { ...(turno.sesionMedicaBorrador?.sala || {}), consumoBaseStock: qtyBase, iniciadaAt: new Date().toISOString() },
+      }
       if (import.meta.env.VITE_SUPABASE_URL) {
         const { error } = await supabase.from("turnos").update({
           estado: "en_curso",
           sesion_iniciada_desde: "sala",
           obs: upsertSalaTrabajoEnObs(turno.obs, salaAsignada),
+          sesion_medica_borrador: borradorSala,
         }).eq("id", turno.id)
         if (error) {
           alert(error.message || "No se pudo iniciar la atención.")
@@ -15787,6 +15829,7 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
               sesionIniciadaDesde: "sala",
               sesionIniciadaAt: new Date().toISOString(),
               consumoBaseStock: qtyBase,
+              sesionMedicaBorrador: borradorSala,
               salaTrabajo: salaAsignada,
               obs: upsertSalaTrabajoEnObs(t.obs, salaAsignada),
             } : t),
@@ -15844,8 +15887,11 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           return
         }
         const turnoActualDb = data.clinics[clinic].turnos.find(t => t.id === turno.id) || turno
-        // Usar ref primero (sobrevive Realtime refresh) → local state → {}
-        const qtyBaseDb = consumoBaseMapRef.current[turno.id] || turnoActualDb?.consumoBaseStock || {}
+        // ref (sobrevive Realtime) → estado local → borrador JSONB en BD (sobrevive recarga de página) → {}
+        const qtyBaseDb = consumoBaseMapRef.current[turno.id]
+          || turnoActualDb?.consumoBaseStock
+          || turnoActualDb?.sesionMedicaBorrador?.sala?.consumoBaseStock
+          || {}
         const qtyTotalDb = mergeQtyMaps(qtyBaseDb, qty)
         const detalleInsumos = Object.entries(qtyTotalDb).map(([k, v]) => {
           const s = (data.clinics[clinic]?.stock || []).find(x => x.id === +k)
@@ -15915,8 +15961,6 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           }
         }
         await sincronizarAlertaCobroDesdeDb(setData, turno.id)
-        // Limpiar ref del turno ya finalizado
-        delete consumoBaseMapRef.current[turno.id]
         const deltaStock = calcularDeltaStockAtencion({
           qtyBaseInicial: qtyBaseDb,
           qtyPlanificado: qtyMapFromMaterialesServicio(srv),
@@ -15933,7 +15977,10 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
         }
       }
       const turnoActual = data.clinics[clinic].turnos.find(t => t.id === turno.id) || turno
-      const qtyBase = turnoActual?.consumoBaseStock || {}
+      const qtyBase = consumoBaseMapRef.current[turno.id]
+        || turnoActual?.consumoBaseStock
+        || turnoActual?.sesionMedicaBorrador?.sala?.consumoBaseStock
+        || {}
       const qtyTotal = mergeQtyMaps(qtyBase, qty)
       const deltaStockLocal = calcularDeltaStockAtencion({
         qtyBaseInicial: qtyBase,
@@ -15958,6 +16005,8 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           clinic, turno: turnoParaCerrar, servicioId: sid, protocolo, notas, qty: qtyTotal, qtyDescontar: {}, nombreProfesional,
         })
       })
+      // Limpiar ref del turno ya finalizado (después de ambas lecturas de qtyBase)
+      delete consumoBaseMapRef.current[turno.id]
       setActivo(null)
       setServicioSel(null)
       setProtocolo("")
@@ -15983,155 +16032,211 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
     return diff
   }
 
-  const enEspera = lista.filter(t => t.estado === "en_sala")
-  const enAtencion = lista.filter(t => t.estado === "en_curso")
+  const enEspera = lista.filter(t => t.estado === "en_sala").sort((a, b) => String(a.hora).localeCompare(String(b.hora)))
+  const enAtencion = lista.filter(t => t.estado === "en_curso").sort((a, b) => String(a.hora).localeCompare(String(b.hora)))
 
-  const tarjetaBase = {
-    borderRadius: 16,
-    padding: "18px 20px",
-    boxShadow: "0 2px 8px rgba(0,0,0,.07)",
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-  }
+  const iniciales = n => String(n || "?").trim().split(/\s+/).slice(0, 2).map(w => (w[0] || "").toUpperCase()).join("") || "?"
 
   const TiempoEspera = ({ minutos }) => {
     const color = minutos < 15 ? "#059669" : minutos < 30 ? "#D97706" : "#DC2626"
     return (
-      <span style={{ fontSize: 11, fontWeight: 800, color, background: color + "18", borderRadius: 20, padding: "3px 9px" }}>
-        {minutos < 1 ? "Ahora" : `${minutos} min`}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 800, color, background: color + "14", border: `1px solid ${color}30`, borderRadius: 20, padding: "4px 10px", whiteSpace: "nowrap" }}>
+        <Clock size={11} strokeWidth={2.5}/>{minutos < 1 ? "Ahora" : minutos >= 60 ? `${Math.floor(minutos / 60)} h ${minutos % 60} min` : `${minutos} min`}
       </span>
     )
   }
 
+  const Avatar = ({ nombre, color, size = 44 }) => (
+    <div style={{
+      width: size, height: size, borderRadius: "50%", flexShrink: 0,
+      background: `linear-gradient(135deg, ${color || C.violet}, ${color || C.violet}99)`,
+      color: "#fff", fontWeight: 800, fontSize: size * 0.36,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: `0 4px 12px ${color || C.violet}40, 0 0 0 2px rgba(255,255,255,.85) inset`,
+      letterSpacing: "0.02em",
+    }}>
+      {iniciales(nombre)}
+    </div>
+  )
+
+  const Pildora = ({ icon: Icon, children, tono = "neutro" }) => {
+    const t = {
+      neutro:  { bg: "rgba(241,245,249,.8)",  fg: "#475569", bd: "rgba(203,213,225,.5)" },
+      violeta: { bg: "rgba(238,242,255,.9)",  fg: C.violetDark, bd: "rgba(199,210,254,.6)" },
+      verde:   { bg: "rgba(240,253,244,.9)",  fg: "#047857", bd: "rgba(167,243,208,.6)" },
+    }[tono]
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, background: t.bg, color: t.fg, border: `1px solid ${t.bd}`, borderRadius: 8, padding: "4px 10px", maxWidth: "100%" }}>
+        {Icon && <Icon size={12} style={{ flexShrink: 0 }}/>}
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{children}</span>
+      </span>
+    )
+  }
+
+  const lanePanel = {
+    background: C.glassBgSoft,
+    backdropFilter: C.glassBlur,
+    WebkitBackdropFilter: C.glassBlur,
+    border: `1px solid ${C.border}`,
+    borderRadius: 20,
+    boxShadow: C.glassShadow,
+    padding: 18,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    minHeight: 220,
+  }
+
+  const tarjetaPaciente = {
+    background: "rgba(255,255,255,.92)",
+    borderRadius: 16,
+    padding: "16px 18px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 8px 24px -12px rgba(15,23,42,.12)",
+    transition: "transform .15s ease, box-shadow .15s ease",
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* ─── CABECERA ──────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h2 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: C.text }}>Sala en tiempo real</h2>
-          <p style={{ fontSize: 13, color: C.muted, marginTop: 4, marginBottom: 0 }}>
-            Pacientes esperando y en atención — actualiza cada 30 s
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: C.text, letterSpacing: "-0.02em" }}>Sala en tiempo real</h2>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "#047857", background: "rgba(240,253,244,.9)", border: "1px solid rgba(167,243,208,.7)", borderRadius: 20, padding: "4px 11px" }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#10B981", animation: "erp-pulse 2s infinite" }}/>
+              EN VIVO
+            </span>
+          </div>
+          <p style={{ fontSize: 13, color: C.muted, marginTop: 5, marginBottom: 0 }}>
+            Hoy · {enEspera.length + enAtencion.length} {enEspera.length + enAtencion.length === 1 ? "paciente activo" : "pacientes activos"} — los tiempos se actualizan solos
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 18px", textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "#1D4ED8", lineHeight: 1 }}>{enEspera.length}</div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#3B82F6", marginTop: 2 }}>Esperando</div>
-          </div>
-          <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 12, padding: "10px 18px", textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: C.violet, lineHeight: 1 }}>{enAtencion.length}</div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.violet, marginTop: 2 }}>En atención</div>
-          </div>
+          {[
+            { n: enEspera.length, label: "Esperando", color: "#2563EB", bg: "rgba(239,246,255,.85)", bd: "rgba(191,219,254,.8)" },
+            { n: enAtencion.length, label: "En atención", color: C.violetDark, bg: "rgba(238,242,255,.85)", bd: "rgba(199,210,254,.8)" },
+          ].map(k => (
+            <div key={k.label} style={{ background: k.bg, backdropFilter: "blur(12px)", border: `1px solid ${k.bd}`, borderRadius: 14, padding: "10px 20px", textAlign: "center", minWidth: 92, boxShadow: "0 1px 2px rgba(255,255,255,.7) inset" }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: k.color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{k.n}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: k.color, marginTop: 4, textTransform: "uppercase", letterSpacing: "0.07em", opacity: .8 }}>{k.label}</div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {lista.length === 0 && (
-        <div style={{ background: C.card, borderRadius: 16, padding: 48, textAlign: "center", color: "#94A3B8", fontSize: 14 }}>
-          <Users size={36} color="#CBD5E1" style={{ marginBottom: 12 }}/>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>No hay pacientes en sala</div>
-          <div style={{ fontSize: 12 }}>Desde Agenda, pasá el turno a «A sala» para que aparezca aquí.</div>
-        </div>
-      )}
-
-      {/* ─── SALA DE ESPERA ─────────────────────── */}
-      {enEspera.length > 0 && (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#3B82F6", boxShadow: "0 0 0 3px #BFDBFE" }}/>
-            <span style={{ fontSize: 13, fontWeight: 800, color: "#1D4ED8", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              Sala de espera — {enEspera.length} {enEspera.length === 1 ? "paciente" : "pacientes"}
-            </span>
+      {lista.length === 0 ? (
+        <div style={{ ...lanePanel, alignItems: "center", justifyContent: "center", padding: 56, textAlign: "center" }}>
+          <div style={{ width: 72, height: 72, borderRadius: "50%", background: "linear-gradient(135deg, rgba(238,242,255,.9), rgba(245,243,255,.7))", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 2px rgba(255,255,255,.9) inset, 0 8px 24px -12px rgba(99,102,241,.25)" }}>
+            <Users size={30} color={C.violet} strokeWidth={1.75}/>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-            {enEspera.map(t => {
+          <div style={{ fontWeight: 800, fontSize: 16, color: C.text, marginTop: 4 }}>Sala vacía por ahora</div>
+          <div style={{ fontSize: 13, color: C.muted, maxWidth: 340, lineHeight: 1.5 }}>
+            Cuando recepción pase un turno a <strong>«A sala»</strong> desde la Agenda, el paciente aparece aquí al instante con su tiempo de espera.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 16, alignItems: "start" }}>
+
+          {/* ─── CARRIL: SALA DE ESPERA ─────────── */}
+          <div style={lanePanel}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#3B82F6", boxShadow: "0 0 0 3px rgba(191,219,254,.8)" }}/>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: "#1D4ED8", letterSpacing: "0.07em", textTransform: "uppercase" }}>Sala de espera</span>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "#1D4ED8", background: "rgba(239,246,255,.95)", border: "1px solid rgba(191,219,254,.8)", borderRadius: 20, padding: "2px 11px", fontVariantNumeric: "tabular-nums" }}>{enEspera.length}</span>
+            </div>
+
+            {enEspera.length === 0 && (
+              <div style={{ fontSize: 12.5, color: C.muted, textAlign: "center", padding: "28px 12px", background: "rgba(255,255,255,.5)", borderRadius: 12, border: `1px dashed ${C.borderSolid}` }}>
+                Nadie esperando ahora mismo.
+              </div>
+            )}
+
+            {enEspera.map((t, i) => {
               const prof = profs.find(p => p.id === t.profesionalId)
               const mins = minutosDesdeTurno(t)
               return (
-                <div key={t.id} style={{ ...tarjetaBase, background: "#fff", border: "2px solid #BFDBFE", borderLeft: `5px solid ${prof?.color || "#3B82F6"}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{t.cliente}</div>
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{t.hora} · Turno #{t.id}</div>
+                <div key={t.id} style={{ ...tarjetaPaciente, borderLeft: `4px solid ${prof?.color || "#3B82F6"}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <Avatar nombre={t.cliente} color={prof?.color || "#3B82F6"}/>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.cliente}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>
+                        {i === 0 && enEspera.length > 1 ? "Siguiente · " : ""}{t.hora} · #{t.id}
+                      </div>
                     </div>
                     <TiempoEspera minutos={mins}/>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", borderRadius: 8, padding: "3px 9px" }}>
-                      {t.servicio || "Sin servicio"}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, background: "#F5F3FF", color: C.violet, borderRadius: 8, padding: "3px 9px" }}>
-                      {prof?.nombre || "Sin especialista"}
-                    </span>
-                    {getSalaTrabajoTurno(t) && (
-                      <span style={{ fontSize: 12, fontWeight: 600, background: "#F0FDF4", color: "#059669", borderRadius: 8, padding: "3px 9px" }}>
-                        {getSalaTrabajoTurno(t)}
-                      </span>
-                    )}
+                    <Pildora icon={Sparkles} tono="violeta">{t.servicio || "Sin servicio"}</Pildora>
+                    <Pildora icon={Stethoscope}>{prof?.nombre || "Sin especialista"}</Pildora>
+                    {getSalaTrabajoTurno(t) && <Pildora tono="verde">{getSalaTrabajoTurno(t)}</Pildora>}
                   </div>
-                  <div style={{ marginTop: 4 }}>
-                    <Btn onClick={() => void iniciar(t)} disabled={iniciandoId === t.id} style={{ width: "100%", justifyContent: "center", minHeight: 40 }}>
-                      {iniciandoId === t.id ? <><Loader2 size={14} className="erp-spin"/> Iniciando…</> : <><MonitorPlay size={14}/> Iniciar atención</>}
-                    </Btn>
-                  </div>
+                  <Btn onClick={() => void iniciar(t)} disabled={iniciandoId === t.id} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
+                    {iniciandoId === t.id ? <><Loader2 size={14} className="erp-spin"/> Iniciando…</> : <><MonitorPlay size={14}/> Iniciar atención</>}
+                  </Btn>
                 </div>
               )
             })}
           </div>
-        </div>
-      )}
 
-      {/* ─── EN ATENCIÓN ────────────────────────── */}
-      {enAtencion.length > 0 && (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: C.violet, animation: "erp-pulse 2s infinite", boxShadow: "0 0 0 3px #DDD6FE" }}/>
-            <span style={{ fontSize: 13, fontWeight: 800, color: C.violet, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              En atención ahora — {enAtencion.length} {enAtencion.length === 1 ? "paciente" : "pacientes"}
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+          {/* ─── CARRIL: EN ATENCIÓN ────────────── */}
+          <div style={lanePanel}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: C.violet, animation: "erp-pulse 2s infinite", boxShadow: "0 0 0 3px rgba(199,210,254,.8)" }}/>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: C.violetDark, letterSpacing: "0.07em", textTransform: "uppercase" }}>En atención ahora</span>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 800, color: C.violetDark, background: "rgba(238,242,255,.95)", border: "1px solid rgba(199,210,254,.8)", borderRadius: 20, padding: "2px 11px", fontVariantNumeric: "tabular-nums" }}>{enAtencion.length}</span>
+            </div>
+
+            {enAtencion.length === 0 && (
+              <div style={{ fontSize: 12.5, color: C.muted, textAlign: "center", padding: "28px 12px", background: "rgba(255,255,255,.5)", borderRadius: 12, border: `1px dashed ${C.borderSolid}` }}>
+                Ningún paciente en atención. Tocá «Iniciar atención» en la sala de espera.
+              </div>
+            )}
+
             {enAtencion.map(t => {
               const prof = profs.find(p => p.id === t.profesionalId)
               const mins = minutosDesdeTurno(t)
               const esActivo = activo?.id === t.id
+              const tieneDraft = !!t.sesionMedicaBorrador?.sala?.draft?.protocolo
               return (
-                <div key={t.id} style={{ ...tarjetaBase, background: "linear-gradient(135deg,#FAF5FF,#F5F3FF)", border: `2px solid ${esActivo ? C.violet : "#DDD6FE"}`, borderLeft: `5px solid ${prof?.color || C.violet}`, position: "relative" }}>
-                  {esActivo && (
-                    <div style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 800, color: "#fff", background: C.violet, borderRadius: 20, padding: "3px 10px", letterSpacing: "0.06em" }}>
-                      SESIÓN ABIERTA
+                <div key={t.id} style={{
+                  ...tarjetaPaciente,
+                  background: "linear-gradient(150deg, rgba(255,255,255,.96) 0%, rgba(238,242,255,.85) 100%)",
+                  borderLeft: `4px solid ${prof?.color || C.violet}`,
+                  boxShadow: esActivo
+                    ? `0 0 0 2px ${C.violet}55, 0 8px 24px -10px rgba(99,102,241,.35)`
+                    : tarjetaPaciente.boxShadow,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ position: "relative", flexShrink: 0 }}>
+                      <Avatar nombre={t.cliente} color={prof?.color || C.violet}/>
+                      <span style={{ position: "absolute", bottom: 0, right: 0, width: 13, height: 13, borderRadius: "50%", background: "#10B981", border: "2.5px solid #fff", animation: "erp-pulse 2s infinite" }}/>
                     </div>
-                  )}
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingRight: esActivo ? 100 : 0 }}>
-                    <div>
-                      <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{t.cliente}</div>
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{t.hora} · Turno #{t.id}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.cliente}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{t.hora} · #{t.id}</div>
                     </div>
                     <TiempoEspera minutos={mins}/>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, background: "#EDE9FE", color: C.violet, borderRadius: 8, padding: "3px 9px" }}>
-                      {t.servicio || "Sin servicio"}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, background: "#fff", color: C.text, borderRadius: 8, padding: "3px 9px", border: "1px solid #DDD6FE" }}>
-                      {prof?.nombre || "Sin especialista"}
-                    </span>
-                    {getSalaTrabajoTurno(t) && (
-                      <span style={{ fontSize: 12, fontWeight: 600, background: "#F0FDF4", color: "#059669", borderRadius: 8, padding: "3px 9px" }}>
-                        {getSalaTrabajoTurno(t)}
-                      </span>
-                    )}
+                    <Pildora icon={Sparkles} tono="violeta">{t.servicio || "Sin servicio"}</Pildora>
+                    <Pildora icon={Stethoscope}>{prof?.nombre || "Sin especialista"}</Pildora>
+                    {getSalaTrabajoTurno(t) && <Pildora tono="verde">{getSalaTrabajoTurno(t)}</Pildora>}
                   </div>
-                  {!esActivo && (
-                    <Btn variant="outline" onClick={() => {
-                      setActivo(t)
-                      setSalaTrabajoActiva(getSalaTrabajoTurno(t) || "Sala 1")
-                      setServicioSel(defaultServicioId(t))
-                      setProtocolo("")
-                      setNotas("")
-                      setQty({})
-                    }} style={{ width: "100%", justifyContent: "center", minHeight: 40, marginTop: 4 }}>
-                      Completar orden de servicio
+                  {esActivo ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 700, color: C.violetDark, background: "rgba(238,242,255,.9)", border: "1px solid rgba(199,210,254,.7)", borderRadius: 10, padding: "9px 12px", justifyContent: "center" }}>
+                      <Activity size={13}/> Orden de servicio abierta
+                    </div>
+                  ) : (
+                    <Btn variant="outline" onClick={() => abrirOrden(t)} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
+                      <ClipboardCheck size={14}/> {tieneDraft ? "Continuar orden (borrador guardado)" : "Completar orden de servicio"}
                     </Btn>
                   )}
                 </div>
@@ -16152,10 +16257,17 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
 
             {/* Info del turno */}
-            <div style={{ background:"#F8FAFC", borderRadius:10, padding:"10px 14px", fontSize:13, color:C.muted, display:"flex", gap:16, flexWrap:"wrap" }}>
-              <span>🕐 <strong style={{ color:C.text }}>{activo.hora}</strong></span>
-              <span>💆 <strong style={{ color:C.text }}>{activo.servicio || "—"}</strong></span>
-              <span>👤 <strong style={{ color:C.text }}>{profs.find(p => p.id === activo.profesionalId)?.nombre || "—"}</strong></span>
+            <div style={{ background:"linear-gradient(135deg, rgba(238,242,255,.7), rgba(248,250,252,.9))", border:`1px solid ${C.border}`, borderRadius:12, padding:"12px 14px", display:"flex", alignItems:"center", gap:12 }}>
+              <Avatar nombre={activo.cliente} color={profs.find(p => p.id === activo.profesionalId)?.color || C.violet} size={38}/>
+              <div style={{ flex:1, minWidth:0, fontSize:13 }}>
+                <strong style={{ color:C.text }}>{activo.cliente}</strong>
+                <div style={{ color:C.muted, fontSize:12, marginTop:2 }}>
+                  {activo.hora} · {activo.servicio || "Sin servicio"} · {profs.find(p => p.id === activo.profesionalId)?.nombre || "Sin especialista"}
+                </div>
+              </div>
+              <span style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11, fontWeight:700, color:"#047857", whiteSpace:"nowrap" }}>
+                <CheckCircle2 size={12}/> Se guarda solo
+              </span>
             </div>
 
             <FG label="Servicio a facturar *" full>
