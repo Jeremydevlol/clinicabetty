@@ -3516,9 +3516,68 @@ function Stock({ data, clinic, setData, onPersist, role }) {
     return () => { cancelled = true }
   }, [data.proveedores, data.pedidosProveedor, data.incidenciasProveedor, data.trasladosInternos, setData])
 
-  const adjust = (id,d) => setData(dd=>({...dd,clinics:{...dd.clinics,[clinic]:{...dd.clinics[clinic],
-    stock:dd.clinics[clinic].stock.map(p=>p.id===id?{...p,stock:Math.max(0,p.stock+d)}:p)
-  }}}))
+  const adjust = async (id, d) => {
+    const p = all.find(x => x.id === id)
+    if (!p) return
+    const nuevo = Math.max(0, (+p.stock || 0) + d)
+    setData(dd=>({...dd,clinics:{...dd.clinics,[clinic]:{...dd.clinics[clinic],
+      stock:dd.clinics[clinic].stock.map(x=>x.id===id?{...x,stock:nuevo}:x)
+    }}}))
+    // Persistir en BD — antes el ajuste era solo local y se perdía al recargar
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase
+        .from("articulos_por_clinica")
+        .upsert({ clinic_id: clinic, articulo_id: id, cantidad: nuevo }, { onConflict: "clinic_id,articulo_id" })
+      if (error) alert("El ajuste no se guardó en la base de datos: " + (error.message || error))
+    }
+  }
+
+  // ── Edición de producto ──
+  const [openEditProd, setOpenEditProd] = useState(false)
+  const [savingEditProd, setSavingEditProd] = useState(false)
+  const [formProd, setFormProd] = useState(null)
+  const abrirEditProd = p => {
+    setFormProd({ id: p.id, nombre: p.nombre || "", cat: p.cat || "general", unidad: p.unidad || "unidades", stock: +p.stock || 0, minimo: +p.minimo || 0, costo: +p.costo || 0, proveedor: p.proveedor || "" })
+    setOpenEditProd(true)
+  }
+  const upr = (k, v) => setFormProd(f => ({ ...f, [k]: v }))
+  const saveEditProd = async () => {
+    if (!formProd || !String(formProd.nombre).trim()) return
+    setSavingEditProd(true)
+    try {
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { error: eArt } = await supabase.from("articulos").update({
+          nombre: String(formProd.nombre).trim(),
+          cat: String(formProd.cat || "general"),
+          unidad: String(formProd.unidad || "unidades"),
+          minimo: +formProd.minimo || 0,
+          costo: +formProd.costo || 0,
+          proveedor: String(formProd.proveedor || ""),
+        }).eq("id", formProd.id)
+        if (eArt) { alert("No se pudo guardar el artículo: " + (eArt.message || eArt)); return }
+        const { error: eApc } = await supabase
+          .from("articulos_por_clinica")
+          .upsert({ clinic_id: clinic, articulo_id: formProd.id, cantidad: +formProd.stock || 0 }, { onConflict: "clinic_id,articulo_id" })
+        if (eApc) { alert("Artículo guardado, pero el stock no se actualizó: " + (eApc.message || eApc)); return }
+      }
+      setData(d=>({...d,clinics:{...d.clinics,[clinic]:{...d.clinics[clinic],
+        stock:d.clinics[clinic].stock.map(p=>p.id===formProd.id?{
+          ...p,
+          nombre: String(formProd.nombre).trim(),
+          cat: formProd.cat,
+          unidad: formProd.unidad,
+          stock: +formProd.stock || 0,
+          minimo: +formProd.minimo || 0,
+          costo: +formProd.costo || 0,
+          proveedor: formProd.proveedor,
+        }:p)
+      }}}))
+      setOpenEditProd(false)
+      await onPersist?.()
+    } finally {
+      setSavingEditProd(false)
+    }
+  }
   const del = async id => {
     const enUso = (data.servicios || []).some(s => (s.materialesStockIds || []).includes(id))
     if (enUso) {
@@ -4035,8 +4094,9 @@ function Stock({ data, clinic, setData, onPersist, role }) {
       />
 
       {tab === "articulos" && (
-      <div style={{display:"grid",gridTemplateColumns:compact?"1fr":"repeat(3,1fr)",gap:14,marginBottom:20}}>
+      <div style={{display:"grid",gridTemplateColumns:compact?"1fr 1fr":"repeat(4,1fr)",gap:14,marginBottom:20}}>
         <KpiCard title="Total Productos" value={all.length} sub="En inventario"                             icon={Package}       accent={C.violet}  />
+        <KpiCard title="Valor inventario" value={fmt(all.reduce((a,p)=>a+(+p.stock||0)*(+p.costo||0),0))} sub="Stock × coste unitario" icon={DollarSign} accent={C.success} />
         <KpiCard title="Stock Bajo"      value={all.filter(p=>p.stock>0&&p.stock<=p.minimo).length} sub="Bajo mínimo" trend="Reponer" icon={AlertTriangle} accent={C.warning} />
         <KpiCard title="Sin Stock"       value={all.filter(p=>p.stock===0).length} sub="Agotados" trend={all.filter(p=>p.stock===0).length>0?"Urgente":undefined} icon={AlertTriangle} accent={C.danger} />
       </div>
@@ -4060,7 +4120,7 @@ function Stock({ data, clinic, setData, onPersist, role }) {
         </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
-            <THead cols={["Producto","Categoría","Stock","Mínimo","Estado","Ajustar"]}/>
+            <THead cols={["Producto","Categoría","Stock","Mínimo","Coste / Valor","Estado","Ajustar"]}/>
             <tbody>
               {list.map(p=>{
                 const bt = p.stock===0?"cancelado":p.stock<=p.minimo?"pendiente":"confirmado"
@@ -4068,8 +4128,10 @@ function Stock({ data, clinic, setData, onPersist, role }) {
                 return (
                   <tr key={p.id} style={{borderBottom:`1px solid ${C.subtle}`}}>
                     <td style={{padding:"12px 14px"}}>
-                      <div style={{fontWeight:600,fontSize:13}}>{p.nombre}</div>
-                      <div style={{fontSize:11,color:"#94A3B8",marginTop:1}}>{p.proveedor}</div>
+                      <button type="button" onClick={()=>abrirEditProd(p)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", textAlign:"left" }} title="Tocar para editar el artículo">
+                        <div style={{fontWeight:700,fontSize:13,color:C.violet}}>{p.nombre}</div>
+                        <div style={{fontSize:11,color:"#94A3B8",marginTop:1}}>{p.proveedor || "Sin proveedor"}</div>
+                      </button>
                     </td>
                     <td style={{padding:"12px 14px"}}><Badge type={p.cat==="general"?"gray":p.cat}>{catLabel[p.cat]}</Badge></td>
                     <td style={{padding:"12px 14px"}}>
@@ -4078,18 +4140,23 @@ function Stock({ data, clinic, setData, onPersist, role }) {
                       <StockBar stock={p.stock} minimo={p.minimo}/>
                     </td>
                     <td style={{padding:"12px 14px",fontSize:13,color:C.muted}}>{p.minimo} {p.unidad}</td>
+                    <td style={{padding:"12px 14px",fontSize:12,whiteSpace:"nowrap"}}>
+                      <div style={{fontWeight:600}}>{fmt(p.costo || 0)} <span style={{color:"#94A3B8",fontWeight:400}}>c/u</span></div>
+                      {(+p.stock||0) > 0 && (+p.costo||0) > 0 && <div style={{fontSize:11,color:C.muted,marginTop:1}}>{fmt((+p.stock||0)*(+p.costo||0))} total</div>}
+                    </td>
                     <td style={{padding:"12px 14px"}}><Badge type={bt}>{bl}</Badge></td>
                     <td style={{padding:"12px 14px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <Btn variant="outline" sm onClick={()=>adjust(p.id,1)}>+</Btn>
-                        <Btn variant="outline" sm onClick={()=>adjust(p.id,-1)}>−</Btn>
+                        <Btn variant="outline" sm onClick={()=>void adjust(p.id,1)}>+</Btn>
+                        <Btn variant="outline" sm onClick={()=>void adjust(p.id,-1)}>−</Btn>
+                        <Btn variant="outline" sm onClick={()=>abrirEditProd(p)}><Pencil size={11}/></Btn>
                         <Btn variant="danger"  sm onClick={()=>del(p.id)}><Trash2 size={11}/></Btn>
                       </div>
                     </td>
                   </tr>
                 )
               })}
-              {list.length===0&&<tr><td colSpan={6} style={{textAlign:"center",padding:"32px 0",color:"#94A3B8",fontSize:13}}>Sin productos</td></tr>}
+              {list.length===0&&<tr><td colSpan={7} style={{textAlign:"center",padding:"32px 0",color:"#94A3B8",fontSize:13}}>Sin productos</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4237,6 +4304,28 @@ function Stock({ data, clinic, setData, onPersist, role }) {
           </div>
         </div>
       )}
+
+      <Modal open={openEditProd} onClose={()=>{ if(!savingEditProd) setOpenEditProd(false) }} title={formProd ? `Editar — ${formProd.nombre}` : "Editar producto"}
+        footer={<><Btn variant="outline" disabled={savingEditProd} onClick={()=>setOpenEditProd(false)}>Cancelar</Btn><Btn disabled={savingEditProd} onClick={()=>void saveEditProd()}>{savingEditProd ? "Guardando…" : "Guardar cambios"}</Btn></>}>
+        {formProd && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <FG label="Nombre" full><input style={inp} value={formProd.nombre} onChange={e=>upr("nombre",e.target.value)}/></FG>
+            <FG label="Categoría">
+              <select style={inp} value={formProd.cat} onChange={e=>upr("cat",e.target.value)}>
+                <option value="clinico">Clínico</option>
+                <option value="laser">Láser</option>
+                <option value="botox">Bótox</option>
+                <option value="general">General</option>
+              </select>
+            </FG>
+            <FG label="Unidad"><input style={inp} value={formProd.unidad} onChange={e=>upr("unidad",e.target.value)} placeholder="unidades, vial, kit…"/></FG>
+            <FG label="Stock actual"><input type="number" min="0" style={inp} value={formProd.stock} onChange={e=>upr("stock",e.target.value)}/></FG>
+            <FG label="Stock mínimo"><input type="number" min="0" style={inp} value={formProd.minimo} onChange={e=>upr("minimo",e.target.value)}/></FG>
+            <FG label="Coste unitario (€)"><input type="number" min="0" step="any" style={inp} value={formProd.costo} onChange={e=>upr("costo",e.target.value)}/></FG>
+            <FG label="Proveedor"><input style={inp} value={formProd.proveedor} onChange={e=>upr("proveedor",e.target.value)}/></FG>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={open} onClose={()=>setOpen(false)} title="📦 Agregar Producto"
         footer={<><Btn variant="outline" onClick={()=>setOpen(false)}>Cancelar</Btn><Btn onClick={save}>Guardar</Btn></>}>
@@ -4475,6 +4564,174 @@ function Stock({ data, clinic, setData, onPersist, role }) {
 }
 
 // ─── SECTION: CONTABILIDAD ────────────────────────────────────
+// ─── CONTABILIDAD: plan de cuentas (PGC español) y asientos automáticos ───
+const PGC_CUENTAS = {
+  caja:       { cod: "570", nombre: "Caja, euros" },
+  bancos:     { cod: "572", nombre: "Bancos c/c, euros" },
+  servicios:  { cod: "705", nombre: "Prestaciones de servicios" },
+  materiales: { cod: "700", nombre: "Ventas de mercaderías" },
+  insumos:    { cod: "600", nombre: "Compras de mercaderías" },
+  salarios:   { cod: "640", nombre: "Sueldos y salarios" },
+  alquiler:   { cod: "621", nombre: "Arrendamientos y cánones" },
+  equipos:    { cod: "217", nombre: "Equipos para procesos de información" },
+  otros:      { cod: "629", nombre: "Otros servicios" },
+}
+
+/** Extrae el nº de turno de un concepto tipo "Cobro turno #12 — María". */
+const turnoIdDeConcepto = c => {
+  const m = String(c || "").match(/turno\s*#\s*(\d+)/i)
+  return m?.[1] ? +m[1] : null
+}
+
+/**
+ * Genera el libro diario por partida doble a partir de los movimientos de la clínica.
+ * Cada movimiento produce un asiento de 2 líneas. La contrapartida de tesorería es
+ * 570 Caja, salvo cobros con tarjeta/transferencia (572 Bancos) detectados vía TPV.
+ */
+function generarAsientosContables(movs, tpvMovs) {
+  const metodoPorTurno = {}
+  for (const t of tpvMovs || []) {
+    const tid = turnoIdDeConcepto(t.concepto)
+    if (tid) metodoPorTurno[tid] = t.metodo
+  }
+  const ordenados = [...(movs || [])].sort((a, b) =>
+    String(a.fecha).localeCompare(String(b.fecha)) || ((a.id || 0) - (b.id || 0)))
+  return ordenados.map((m, i) => {
+    const monto = Math.max(0, +m.monto || 0)
+    const tid = turnoIdDeConcepto(m.concepto)
+    const metodo = tid ? metodoPorTurno[tid] : null
+    const tesoreria = metodo === "tarjeta" || metodo === "transferencia" ? PGC_CUENTAS.bancos : PGC_CUENTAS.caja
+    let lineas
+    if (m.tipo === "ingreso") {
+      const abono = m.cat === "materiales" ? PGC_CUENTAS.materiales : PGC_CUENTAS.servicios
+      lineas = [
+        { ...tesoreria, debe: monto, haber: 0 },
+        { ...abono, debe: 0, haber: monto },
+      ]
+    } else {
+      const cargo = PGC_CUENTAS[m.cat] || PGC_CUENTAS.otros
+      lineas = [
+        { ...cargo, debe: monto, haber: 0 },
+        { ...tesoreria, debe: 0, haber: monto },
+      ]
+    }
+    return { num: i + 1, fecha: m.fecha, concepto: m.concepto, tipo: m.tipo, monto, movId: m.id, lineas }
+  })
+}
+
+/** Agrega el libro mayor: saldos por cuenta a partir del diario. */
+function generarLibroMayor(asientos) {
+  const map = {}
+  for (const a of asientos) {
+    for (const l of a.lineas) {
+      if (!map[l.cod]) map[l.cod] = { cod: l.cod, nombre: l.nombre, debe: 0, haber: 0 }
+      map[l.cod].debe += l.debe
+      map[l.cod].haber += l.haber
+    }
+  }
+  return Object.values(map)
+    .map(c => ({ ...c, saldo: c.debe - c.haber }))
+    .sort((a, b) => a.cod.localeCompare(b.cod))
+}
+
+/**
+ * Deriva facturas simplificadas de los cobros del TPV (1 cobro = 1 factura),
+ * numeradas por año en orden cronológico: F-2026-0001, F-2026-0002…
+ */
+function derivarFacturas({ tpvMovimientos, alertasCobro, clinic }) {
+  const cobros = (tpvMovimientos || [])
+    .filter(m => m.tipo === "ingreso" && (+m.clinicId === +clinic || m.clinicId == null))
+    .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || ((a.id || 0) - (b.id || 0)))
+  const porAnio = {}
+  return cobros.map(m => {
+    const anio = String(m.fecha || "").slice(0, 4) || "s/f"
+    porAnio[anio] = (porAnio[anio] || 0) + 1
+    const tid = turnoIdDeConcepto(m.concepto)
+    const alerta = tid ? (alertasCobro || []).find(a => +a.turnoId === tid) : null
+    const cliente = alerta?.paciente || alerta?.cliente
+      || String(m.concepto || "").split("—")[1]?.trim() || "Cliente"
+    return {
+      numero: `F-${anio}-${String(porAnio[anio]).padStart(4, "0")}`,
+      fecha: m.fecha,
+      cliente,
+      servicio: alerta?.servicio || "Servicios de medicina estética",
+      montoServicio: +(alerta?.montoServicio ?? m.monto) || 0,
+      montoInsumos: +(alerta?.montoInsumos ?? 0) || 0,
+      insumos: Array.isArray(alerta?.insumos) ? alerta.insumos : [],
+      total: +m.monto || 0,
+      metodo: m.metodo || "efectivo",
+      comprobante: m.comprobante,
+      turnoId: tid,
+    }
+  }).reverse()
+}
+
+/** Genera y descarga el PDF de una factura simplificada. */
+function descargarFacturaPdf(f, { clinicNombre, ivaPct = 0 }) {
+  const doc = new jsPDF()
+  const azul = [67, 56, 202]
+  doc.setFontSize(20); doc.setTextColor(...azul); doc.setFont(undefined, "bold")
+  doc.text(clinicNombre || "Clínica", 14, 20)
+  doc.setFontSize(10); doc.setTextColor(100); doc.setFont(undefined, "normal")
+  doc.text("Factura simplificada", 14, 27)
+  doc.setFontSize(12); doc.setTextColor(20); doc.setFont(undefined, "bold")
+  doc.text(f.numero, 196, 20, { align: "right" })
+  doc.setFontSize(10); doc.setFont(undefined, "normal"); doc.setTextColor(100)
+  doc.text(`Fecha: ${fmtDate(f.fecha)}`, 196, 27, { align: "right" })
+  doc.text(`Forma de pago: ${METODO_TPV_LABEL[f.metodo] || f.metodo}`, 196, 33, { align: "right" })
+  doc.setTextColor(20)
+  doc.text(`Cliente: ${f.cliente}`, 14, 40)
+
+  const filas = []
+  if (f.montoServicio > 0) filas.push([f.servicio, fmt(f.montoServicio)])
+  for (const x of f.insumos) {
+    if ((x?.subtotal ?? 0) > 0) filas.push([`${x.nombre} ×${x.cantidad ?? 1}`, fmt(x.subtotal)])
+  }
+  if (!filas.length && f.montoInsumos > 0) filas.push(["Consumibles", fmt(f.montoInsumos)])
+  if (!filas.length) filas.push([f.servicio, fmt(f.total)])
+
+  const base = ivaPct > 0 ? f.total / (1 + ivaPct / 100) : f.total
+  const cuotaIva = f.total - base
+  autoTable(doc, {
+    startY: 48,
+    head: [["Concepto", "Importe"]],
+    body: filas,
+    foot: ivaPct > 0
+      ? [["Base imponible", fmt(base)], [`IVA (${ivaPct} %)`, fmt(cuotaIva)], ["TOTAL", fmt(f.total)]]
+      : [["TOTAL", fmt(f.total)]],
+    styles: { fontSize: 10 },
+    headStyles: { fillColor: azul },
+    footStyles: { fillColor: [238, 242, 255], textColor: [30, 27, 75], fontStyle: "bold" },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+  })
+  const y = (doc.lastAutoTable?.finalY || 100) + 10
+  doc.setFontSize(8); doc.setTextColor(120)
+  doc.text(
+    ivaPct > 0
+      ? "IVA incluido según los tipos indicados."
+      : "Operación exenta de IVA conforme al art. 20.Uno.3º de la Ley 37/1992 (asistencia sanitaria).",
+    14, y)
+  if (f.comprobante) doc.text(`Ref. cobro: ${f.comprobante}`, 14, y + 5)
+  doc.save(`${f.numero}.pdf`)
+}
+
+/** Exporta el libro diario a Excel. */
+function exportarDiarioExcel(asientos) {
+  const filas = []
+  for (const a of asientos) {
+    for (const l of a.lineas) {
+      filas.push({
+        "Asiento": a.num, "Fecha": a.fecha, "Cuenta": l.cod, "Denominación": l.nombre,
+        "Concepto": a.concepto, "Debe": l.debe || "", "Haber": l.haber || "",
+      })
+    }
+  }
+  const ws = XLSX.utils.json_to_sheet(filas)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Libro diario")
+  XLSX.writeFile(wb, `libro-diario-${TODAY}.xlsx`)
+}
+
 function Contabilidad({ data, clinic, setData }) {
   const compact = useMediaQuery("(max-width: 980px)")
   const [tab, setTab] = useState("resumen")
@@ -4537,6 +4794,29 @@ function Contabilidad({ data, clinic, setData }) {
   // Pending turnos
   const turnosPendientes = turnos.filter(t => t.estado === "pendiente" || t.estado === "confirmado")
   const turnosHoy = turnosPendientes.filter(t => t.fecha === TODAY)
+
+  // ── Facturación y libros contables (derivados, siempre al día) ──
+  const [ivaPct, setIvaPct] = useState(0) // 0 = exento sanitario (art. 20.Uno.3º LIVA)
+  const [buscaFactura, setBuscaFactura] = useState("")
+  const facturas = useMemo(
+    () => derivarFacturas({ tpvMovimientos: data.tpv?.movimientos, alertasCobro, clinic }),
+    [data.tpv?.movimientos, alertasCobro, clinic],
+  )
+  const facturasFiltradas = useMemo(() => {
+    const q = buscaFactura.trim().toLowerCase()
+    if (!q) return facturas
+    return facturas.filter(f =>
+      f.numero.toLowerCase().includes(q) || f.cliente.toLowerCase().includes(q) || String(f.servicio).toLowerCase().includes(q))
+  }, [facturas, buscaFactura])
+  const asientos = useMemo(
+    () => generarAsientosContables(movs, data.tpv?.movimientos),
+    [movs, data.tpv?.movimientos],
+  )
+  const libroMayor = useMemo(() => generarLibroMayor(asientos), [asientos])
+  const totalDiario = useMemo(
+    () => asientos.reduce((a, x) => a + x.lineas.reduce((s, l) => s + l.debe, 0), 0),
+    [asientos],
+  )
 
   const abrirDetalle = mov => { setMovSel(mov); setOpenDetalle(true) }
   const turnoIdSel = useMemo(() => {
@@ -4607,7 +4887,128 @@ function Contabilidad({ data, clinic, setData }) {
         ))}
       </div>
 
-      <TabBar tabs={[{id:"resumen",label:"Resumen"},{id:"doctor",label:"Por doctor"},{id:"servicio",label:"Por servicio"},{id:"pendientes",label:`Pendientes (${turnosHoy.length})`},{id:"movimientos",label:"Movimientos"}]} active={tab} onChange={setTab}/>
+      <TabBar tabs={[
+        {id:"resumen",label:"Resumen"},
+        {id:"facturas",label:`Facturación (${facturas.length})`},
+        {id:"diario",label:"Libro diario"},
+        {id:"mayor",label:"Libro mayor"},
+        {id:"doctor",label:"Por doctor"},
+        {id:"servicio",label:"Por servicio"},
+        {id:"pendientes",label:`Pendientes (${turnosHoy.length})`},
+        {id:"movimientos",label:"Movimientos"},
+      ]} active={tab} onChange={setTab}/>
+
+      {tab === "facturas" && (
+        <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:14}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700}}>Facturas simplificadas — 1 por cobro del TPV</div>
+              <div style={{fontSize:11.5,color:C.muted,marginTop:3}}>Numeración automática por año en orden cronológico. Descargá el PDF de cada una.</div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input style={{...inp,width:200,padding:"8px 10px"}} placeholder="Buscar nº, cliente, servicio…" value={buscaFactura} onChange={e=>setBuscaFactura(e.target.value)}/>
+              <select style={{...inp,width:"auto",padding:"8px 10px"}} value={ivaPct} onChange={e=>setIvaPct(+e.target.value)} title="Régimen de IVA aplicado al PDF">
+                <option value={0}>IVA: exento sanitario</option>
+                <option value={21}>IVA: 21 % incluido</option>
+              </select>
+            </div>
+          </div>
+          {facturasFiltradas.length === 0 ? (
+            <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:13}}>
+              {facturas.length === 0 ? "Aún no hay cobros registrados en el TPV — al cobrar una orden se genera la factura sola." : "Sin resultados para esa búsqueda."}
+            </div>
+          ) : (
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <THead cols={["Nº factura","Fecha","Cliente","Concepto","Pago","Total",""]}/>
+                <tbody>
+                  {facturasFiltradas.map(f => (
+                    <tr key={f.numero} style={{borderBottom:`1px solid ${C.subtle}`}}>
+                      <td style={{padding:"11px 14px",fontWeight:800,fontSize:13,color:C.violetDark,whiteSpace:"nowrap"}}>{f.numero}</td>
+                      <td style={{padding:"11px 14px",fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>{fmtDate(f.fecha)}</td>
+                      <td style={{padding:"11px 14px",fontWeight:600,fontSize:13}}>{f.cliente}</td>
+                      <td style={{padding:"11px 14px",fontSize:12,color:C.muted,maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.servicio}</td>
+                      <td style={{padding:"11px 14px"}}><Badge type="gray">{METODO_TPV_LABEL[f.metodo]||f.metodo}</Badge></td>
+                      <td style={{padding:"11px 14px",fontWeight:800,fontSize:13,color:C.success,whiteSpace:"nowrap"}}>{fmt(f.total)}</td>
+                      <td style={{padding:"11px 14px"}}>
+                        <Btn variant="outline" sm onClick={()=>descargarFacturaPdf(f,{clinicNombre:data.clinics[clinic]?.nombre||"Clínica",ivaPct})}>
+                          <Download size={12}/> PDF
+                        </Btn>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "diario" && (
+        <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:14}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700}}>Libro diario — asientos por partida doble (PGC)</div>
+              <div style={{fontSize:11.5,color:C.muted,marginTop:3}}>
+                Generados automáticamente de cada movimiento: tesorería (570/572) contra ingresos (700/705) o gastos (600/621/640/629).
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <span style={{fontSize:12,color:C.muted}}>Suma debe = haber: <strong style={{color:C.text}}>{fmt(totalDiario)}</strong></span>
+              <Btn variant="outline" sm onClick={()=>exportarDiarioExcel(asientos)} disabled={!asientos.length}><Download size={12}/> Excel</Btn>
+            </div>
+          </div>
+          {asientos.length === 0 ? (
+            <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:13}}>Sin movimientos — registrá ingresos/egresos o cobrá órdenes y los asientos aparecen solos.</div>
+          ) : (
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <THead cols={["Nº","Fecha","Cuenta","Denominación","Concepto","Debe","Haber"]}/>
+                <tbody>
+                  {[...asientos].reverse().map(a => a.lineas.map((l, j) => (
+                    <tr key={`${a.num}-${j}`} style={{borderBottom: j === a.lineas.length-1 ? `2px solid ${C.borderSolid}` : `1px solid ${C.subtle}`, background: a.num % 2 ? "transparent" : "rgba(241,245,249,.5)"}}>
+                      <td style={{padding:"9px 14px",fontWeight:700,fontSize:12,color:C.muted}}>{j === 0 ? a.num : ""}</td>
+                      <td style={{padding:"9px 14px",fontSize:12,color:C.muted,whiteSpace:"nowrap"}}>{j === 0 ? fmtDate(a.fecha) : ""}</td>
+                      <td style={{padding:"9px 14px",fontWeight:800,fontSize:12,fontFamily:"monospace"}}>{l.cod}</td>
+                      <td style={{padding:"9px 14px",fontSize:12.5,paddingLeft: l.haber > 0 ? 28 : 14}}>{l.nombre}</td>
+                      <td style={{padding:"9px 14px",fontSize:11.5,color:C.muted,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{j === 0 ? a.concepto : ""}</td>
+                      <td style={{padding:"9px 14px",fontSize:12.5,fontWeight:700,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{l.debe > 0 ? fmt(l.debe) : ""}</td>
+                      <td style={{padding:"9px 14px",fontSize:12.5,fontWeight:700,textAlign:"right",fontVariantNumeric:"tabular-nums",color:C.muted}}>{l.haber > 0 ? fmt(l.haber) : ""}</td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "mayor" && (
+        <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>Libro mayor — saldos por cuenta</div>
+          <div style={{fontSize:11.5,color:C.muted,marginBottom:14}}>Acumulado de débitos y créditos del libro diario. Saldo positivo = deudor, negativo = acreedor.</div>
+          {libroMayor.length === 0 ? (
+            <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:13}}>Sin datos todavía.</div>
+          ) : (
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <THead cols={["Cuenta","Denominación","Debe","Haber","Saldo"]}/>
+              <tbody>
+                {libroMayor.map(c => (
+                  <tr key={c.cod} style={{borderBottom:`1px solid ${C.subtle}`}}>
+                    <td style={{padding:"11px 14px",fontWeight:800,fontSize:13,fontFamily:"monospace"}}>{c.cod}</td>
+                    <td style={{padding:"11px 14px",fontSize:13}}>{c.nombre}</td>
+                    <td style={{padding:"11px 14px",fontSize:13,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmt(c.debe)}</td>
+                    <td style={{padding:"11px 14px",fontSize:13,textAlign:"right",fontVariantNumeric:"tabular-nums",color:C.muted}}>{fmt(c.haber)}</td>
+                    <td style={{padding:"11px 14px",fontWeight:800,fontSize:13,textAlign:"right",fontVariantNumeric:"tabular-nums",color: c.saldo >= 0 ? C.success : C.danger}}>
+                      {fmt(Math.abs(c.saldo))} {c.saldo >= 0 ? "D" : "H"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {tab === "resumen" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
@@ -5046,23 +5447,60 @@ function Servicios({ data, clinic, setData, onGoStock, onPersist }) {
     {key:"laser",  label:"Láser",   icon:"⚡", accent:"#3730A3",bg:"#EEF2FF",bdr:"#C7D2FE",desc:"Tratamientos con tecnología láser"},
     {key:"botox",  label:"Bótox",   icon:"💉", accent:"#6B21A8",bg:"#FDF4FF",bdr:"#E9D5FF",desc:"Toxina botulínica y rellenos"},
   ]
+  const [ordenSrv, setOrdenSrv] = useState("nombre")
+  /** Coste estimado de materiales de una sesión, a partir del stock de la clínica. */
+  const costeMateriales = s => {
+    const cants = Array.isArray(s.materialesCantidades) && s.materialesCantidades.length
+      ? s.materialesCantidades
+      : (Array.isArray(s.materialesStockIds) ? s.materialesStockIds.map(id => ({ id, qty: 1 })) : [])
+    return cants.reduce((a, x) => a + (+(stockById.get(+x.id)?.costo || 0)) * Math.max(1, +x.qty || 1), 0)
+  }
   const filteredServicios = useMemo(() => {
     const q = String(searchSrv || "").trim().toLowerCase()
-    return (data.servicios || []).filter(s => {
+    const base = (data.servicios || []).filter(s => {
       if (catFilter !== "todos" && s.cat !== catFilter) return false
       if (!q) return true
       return String(s.nombre || "").toLowerCase().includes(q) || String(s.desc || "").toLowerCase().includes(q)
     })
-  }, [data.servicios, catFilter, searchSrv])
+    const orden = {
+      nombre: (a, b) => String(a.nombre).localeCompare(String(b.nombre)),
+      precio_desc: (a, b) => (+b.precio || 0) - (+a.precio || 0),
+      precio_asc: (a, b) => (+a.precio || 0) - (+b.precio || 0),
+      duracion: (a, b) => (+a.duracion || 0) - (+b.duracion || 0),
+    }[ordenSrv]
+    return orden ? [...base].sort(orden) : base
+  }, [data.servicios, catFilter, searchSrv, ordenSrv])
+  const statsSrv = useMemo(() => {
+    const list = data.servicios || []
+    const conPrecio = list.filter(s => +s.precio > 0)
+    const precioMedio = conPrecio.length ? conPrecio.reduce((a, s) => a + +s.precio, 0) / conPrecio.length : 0
+    const conMateriales = list.filter(s => (s.materialesCantidades?.length || s.materialesStockIds?.length)).length
+    return { total: list.length, precioMedio, conMateriales, sinPrecio: list.length - conPrecio.length }
+  }, [data.servicios])
 
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:22,flexWrap:"wrap",gap:10}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
         <div>
-          <h2 style={{fontSize:20,fontWeight:700}}>Catálogo de Servicios</h2>
+          <h2 style={{fontSize:20,fontWeight:800}}>Catálogo de Servicios</h2>
           <p style={{fontSize:13,color:C.muted,marginTop:2}}>{data.servicios.length} servicios registrados</p>
         </div>
         <Btn onClick={()=>setOpen(true)}><Plus size={14}/> Nuevo Servicio</Btn>
+      </div>
+
+      {/* KPIs del catálogo */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))", gap:10, marginBottom:16 }}>
+        {[
+          { label:"Servicios", val: statsSrv.total, color: C.violetDark, bg:"rgba(238,242,255,.85)", bd:"rgba(199,210,254,.7)" },
+          { label:"Precio medio", val: fmt(statsSrv.precioMedio), color:"#047857", bg:"rgba(240,253,244,.85)", bd:"rgba(167,243,208,.7)" },
+          { label:"Con materiales asociados", val: statsSrv.conMateriales, color:"#1D4ED8", bg:"rgba(239,246,255,.85)", bd:"rgba(191,219,254,.7)" },
+          { label:"Sin precio definido", val: statsSrv.sinPrecio, color: statsSrv.sinPrecio ? "#B45309" : C.muted, bg:"rgba(255,251,235,.85)", bd:"rgba(253,230,138,.7)" },
+        ].map(k => (
+          <div key={k.label} style={{ background:k.bg, border:`1px solid ${k.bd}`, borderRadius:14, padding:"12px 16px" }}>
+            <div style={{ fontSize:20, fontWeight:800, color:k.color, lineHeight:1, fontVariantNumeric:"tabular-nums" }}>{k.val}</div>
+            <div style={{ fontSize:10.5, fontWeight:700, color:k.color, marginTop:5, textTransform:"uppercase", letterSpacing:"0.06em", opacity:.85 }}>{k.label}</div>
+          </div>
+        ))}
       </div>
 
       <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
@@ -5072,9 +5510,17 @@ function Servicios({ data, clinic, setData, onGoStock, onPersist }) {
           return <button key={cat.key} type="button" onClick={() => setCatFilter(cat.key)} style={{ border:`1px solid ${catFilter===cat.key?cat.accent:cat.bdr}`, background:catFilter===cat.key?cat.bg:C.card, color:catFilter===cat.key?cat.accent:C.text, borderRadius:999, padding:"7px 12px", fontSize:12, fontWeight:700, cursor:"pointer" }}>{cat.label} ({n})</button>
         })}
       </div>
-      <div style={{ display:"flex", alignItems:"center", gap:8, background:C.subtle, border:`1px solid ${C.border}`, borderRadius:10, padding:"8px 12px", marginBottom:16, maxWidth:420 }}>
-        <Search size={14} color="#94A3B8"/>
-        <input style={{ border:"none", background:"transparent", outline:"none", width:"100%", fontSize:13 }} placeholder="Buscar servicio por nombre o descripción..." value={searchSrv} onChange={e => setSearchSrv(e.target.value)} />
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:16 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, background:C.subtle, border:`1px solid ${C.border}`, borderRadius:10, padding:"8px 12px", flex:"1 1 260px", maxWidth:420 }}>
+          <Search size={14} color="#94A3B8"/>
+          <input style={{ border:"none", background:"transparent", outline:"none", width:"100%", fontSize:13 }} placeholder="Buscar servicio por nombre o descripción..." value={searchSrv} onChange={e => setSearchSrv(e.target.value)} />
+        </div>
+        <select style={{ ...inp, width:"auto" }} value={ordenSrv} onChange={e => setOrdenSrv(e.target.value)} title="Ordenar catálogo">
+          <option value="nombre">Orden: A → Z</option>
+          <option value="precio_desc">Precio: mayor a menor</option>
+          <option value="precio_asc">Precio: menor a mayor</option>
+          <option value="duracion">Duración</option>
+        </select>
       </div>
       {filteredServicios.length===0
         ? <div style={{background:C.subtle,borderRadius:12,padding:"18px",fontSize:13,color:"#94A3B8",textAlign:"center",border:`1.5px dashed ${C.border}`}}>
@@ -5082,22 +5528,31 @@ function Servicios({ data, clinic, setData, onGoStock, onPersist }) {
           </div>
         : <div style={{display:"grid",gridTemplateColumns:compact?"1fr":"repeat(3,1fr)",gap:12}}>
             {filteredServicios.map(s=>{
-              const cat = cats.find(c => c.key === s.cat) || { accent:C.violet }
+              const cat = cats.find(c => c.key === s.cat) || { accent:C.violet, label: catLabel[s.cat] || s.cat, bg:C.violetLight, bdr:"#C7D2FE" }
+              const nMateriales = (Array.isArray(s.materialesCantidades) && s.materialesCantidades.length) || (Array.isArray(s.materialesStockIds) && s.materialesStockIds.length) || 0
+              const coste = nMateriales ? costeMateriales(s) : 0
+              const margen = +s.precio > 0 && coste > 0 ? Math.round((1 - coste / +s.precio) * 100) : null
               return (
-                <button key={s.id} type="button" onClick={() => openEditor(s)} style={{ textAlign:"left", background:C.card,borderRadius:14,padding:18, boxShadow:"0 1px 4px rgba(0,0,0,.07)",border:`1px solid ${C.border}`, borderLeft:`4px solid ${cat.accent}`, display:"flex",flexDirection:"column",gap:8, cursor:"pointer" }}>
-                  <div style={{fontWeight:700,fontSize:14,color:C.text}}>{s.nombre}</div>
-                  <div style={{fontSize:12,color:"#94A3B8"}}>{catLabel[s.cat] || s.cat} · ⏱ {s.duracion} min · {s.sesiones} sesión{s.sesiones>1?"es":""}</div>
-                  <div style={{fontSize:20,fontWeight:800,color:cat.accent}}>{fmt(s.precio)}</div>
-                  {s.desc&&<div style={{fontSize:11,color:"#94A3B8"}}>{s.desc}</div>}
-                  {(Array.isArray(s.materialesCantidades) && s.materialesCantidades.length > 0 || Array.isArray(s.materialesStockIds) && s.materialesStockIds.length > 0) && (
-                    <div style={{ fontSize:11, color:C.muted }}>
-                      Artículos: {(Array.isArray(s.materialesCantidades) && s.materialesCantidades.length > 0
-                        ? s.materialesCantidades.map(x => `${stockById.get(+x.id)?.nombre || `#${x.id}`}×${x.qty}`)
-                        : s.materialesStockIds.map(id => stockById.get(+id)?.nombre || `#${id}`)
-                      ).join(", ")}
-                    </div>
-                  )}
-                  <div style={{ fontSize:11, color:C.violet, fontWeight:700, marginTop:2 }}>Tocar para editar</div>
+                <button key={s.id} type="button" onClick={() => openEditor(s)} style={{ textAlign:"left", background:"rgba(255,255,255,.92)", borderRadius:16, padding:18, boxShadow:"0 1px 2px rgba(15,23,42,.04), 0 8px 24px -14px rgba(15,23,42,.14)", border:`1px solid ${C.border}`, borderLeft:`4px solid ${cat.accent}`, display:"flex", flexDirection:"column", gap:9, cursor:"pointer" }}>
+                  <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8 }}>
+                    <div style={{ fontWeight:800, fontSize:14.5, color:C.text, lineHeight:1.3 }}>{s.nombre}</div>
+                    <span style={{ flexShrink:0, fontSize:10.5, fontWeight:800, color:cat.accent, background:cat.bg || C.subtle, border:`1px solid ${cat.bdr || C.border}`, borderRadius:8, padding:"3px 8px", textTransform:"uppercase", letterSpacing:"0.04em" }}>{cat.label || catLabel[s.cat] || s.cat}</span>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"baseline", gap:10 }}>
+                    <span style={{ fontSize:22, fontWeight:800, color:cat.accent, fontVariantNumeric:"tabular-nums" }}>{+s.precio > 0 ? fmt(s.precio) : "Sin precio"}</span>
+                    {margen != null && (
+                      <span style={{ fontSize:11, fontWeight:700, color: margen >= 60 ? "#047857" : margen >= 30 ? "#B45309" : "#DC2626" }} title={`Coste materiales: ${fmt(coste)}`}>
+                        margen {margen} %
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize:12, color:C.muted, display:"flex", gap:10, flexWrap:"wrap" }}>
+                    <span>⏱ {s.duracion} min</span>
+                    <span>{s.sesiones} sesión{s.sesiones>1?"es":""}</span>
+                    {nMateriales > 0 && <span title={`Coste estimado: ${fmt(coste)}`}>📦 {nMateriales} material{nMateriales>1?"es":""}</span>}
+                  </div>
+                  {s.desc && <div style={{ fontSize:11.5, color:"#94A3B8", lineHeight:1.45, display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical", overflow:"hidden" }}>{s.desc}</div>}
+                  <div style={{ fontSize:11, color:C.violet, fontWeight:700, marginTop:"auto" }}>Tocar para editar →</div>
                 </button>
               )
             })}
@@ -5617,6 +6072,9 @@ function DocumentosConsent({ data, setData, clinicId, clinicNombre, sessionEmail
   const sigDocPacRef = useRef(null)
   const sigDocProfRef = useRef(null)
 
+  const [buscaDoc, setBuscaDoc] = useState("")
+  const [filtroPlantilla, setFiltroPlantilla] = useState("")
+
   const rows = useMemo(() => {
     const list = data.consentimientosFirmados || []
     const cid = +clinicId
@@ -5624,6 +6082,29 @@ function DocumentosConsent({ data, setData, clinicId, clinicNombre, sessionEmail
       .filter(r => +r.clinicId === cid)
       .sort((a, b) => String(b.firmadoAt || "").localeCompare(String(a.firmadoAt || "")))
   }, [data.consentimientosFirmados, clinicId])
+
+  const tiposDocumento = useMemo(
+    () => [...new Set(rows.map(r => r.titulo).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [rows],
+  )
+  const rowsFiltradas = useMemo(() => {
+    const q = buscaDoc.trim().toLowerCase()
+    return rows.filter(r => {
+      if (filtroPlantilla && r.titulo !== filtroPlantilla) return false
+      if (!q) return true
+      const paciente = String(r.pacienteNombreSnapshot || "").toLowerCase()
+      return paciente.includes(q)
+        || String(r.titulo || "").toLowerCase().includes(q)
+        || String(r.servicioOProducto || "").toLowerCase().includes(q)
+    })
+  }, [rows, buscaDoc, filtroPlantilla])
+  const mesActual = TODAY.slice(0, 7)
+  const statsDoc = useMemo(() => ({
+    total: rows.length,
+    mes: rows.filter(r => String(r.firmadoAt || "").slice(0, 7) === mesActual).length,
+    conPdf: rows.filter(r => r.pdfStoragePath).length,
+    sinPdf: rows.filter(r => !r.pdfStoragePath).length,
+  }), [rows, mesActual])
   const pacById = useMemo(() => Object.fromEntries((data.pacientes || []).map(p => [p.id, p])), [data.pacientes])
   const empById = useMemo(() => Object.fromEntries((data.empleados || []).map(e => [e.id, e])), [data.empleados])
   const pacientesClinica = useMemo(
@@ -5785,35 +6266,85 @@ function DocumentosConsent({ data, setData, clinicId, clinicNombre, sessionEmail
     }
   }
 
+  const inicialesDoc = n => String(n || "?").trim().split(/\s+/).slice(0, 2).map(w => (w[0] || "").toUpperCase()).join("") || "?"
+
   return (
-    <div style={{ maxWidth: 1100 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14 }}>
-        <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5, flex: "1 1 280px" }}>
-          Registros en <code style={codeStyle(C.subtle)}>consentimientos_firmados</code>. Al dar de alta, si aparece <strong>Descargar modelo Word oficial (.docx)</strong>, ese es el documento de la clínica (como en WeTransfer). El <strong>PDF</strong> que genera la app al firmar es la copia con firmas para archivo digital.
-        </p>
+    <div style={{ maxWidth: 1180 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: C.text }}>Archivo documental</h2>
+          <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>
+            Consentimientos firmados con copia PDF para archivo digital. El modelo Word oficial (.docx) está en cada plantilla.
+          </p>
+        </div>
         {import.meta.env.VITE_SUPABASE_URL && (
           <Btn onClick={abrirNuevoDesdeDocumentos} disabled={pacientesClinica.length === 0}>
             <Plus size={14}/> Nuevo consentimiento
           </Btn>
         )}
       </div>
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+        {[
+          { label: "Documentos", val: statsDoc.total, color: C.violetDark, bg: "rgba(238,242,255,.85)", bd: "rgba(199,210,254,.7)" },
+          { label: "Este mes", val: statsDoc.mes, color: "#047857", bg: "rgba(240,253,244,.85)", bd: "rgba(167,243,208,.7)" },
+          { label: "Con PDF firmado", val: statsDoc.conPdf, color: "#1D4ED8", bg: "rgba(239,246,255,.85)", bd: "rgba(191,219,254,.7)" },
+          { label: "Solo texto (sin PDF)", val: statsDoc.sinPdf, color: statsDoc.sinPdf ? "#B45309" : C.muted, bg: "rgba(255,251,235,.85)", bd: "rgba(253,230,138,.7)" },
+        ].map(k => (
+          <div key={k.label} style={{ background: k.bg, border: `1px solid ${k.bd}`, borderRadius: 14, padding: "12px 16px" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: k.color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{k.val}</div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: k.color, marginTop: 5, textTransform: "uppercase", letterSpacing: "0.06em", opacity: .85 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Buscador y filtro */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 380 }}>
+          <Search size={14} color={C.muted} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}/>
+          <input style={{ ...inp, paddingLeft: 34 }} placeholder="Buscar por paciente, documento o servicio…" value={buscaDoc} onChange={e => setBuscaDoc(e.target.value)}/>
+        </div>
+        <select style={{ ...inp, width: "auto", minWidth: 180 }} value={filtroPlantilla} onChange={e => setFiltroPlantilla(e.target.value)}>
+          <option value="">Todos los documentos</option>
+          {tiposDocumento.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        {(buscaDoc || filtroPlantilla) && (
+          <Btn variant="outline" sm onClick={() => { setBuscaDoc(""); setFiltroPlantilla("") }} style={{ alignSelf: "center" }}>
+            <X size={12}/> Limpiar ({rowsFiltradas.length}/{rows.length})
+          </Btn>
+        )}
+      </div>
+
       {pacientesClinica.length === 0 && (
         <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>No hay pacientes en esta clínica; cargalas en Pacientes / Agenda primero.</p>
       )}
-      <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: C.card }}>
+      <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 14, background: C.card }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <THead cols={["Fecha", "Paciente", "Documento", "Servicio / producto", "Registrado por", "Ver / PDF"]} />
           <tbody>
-            {rows.map(r => {
+            {rowsFiltradas.map(r => {
               const p = pacById[r.clienteId]
-              const fecha = r.firmadoAt ? new Date(r.firmadoAt).toLocaleString("es-ES") : "—"
+              const nombrePac = p?.nombre || r.pacienteNombreSnapshot
+              const fecha = r.firmadoAt ? new Date(r.firmadoAt).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"
               const emp = r.firmadoPorEmpleadoId ? empById[r.firmadoPorEmpleadoId] : null
               return (
                 <tr key={r.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted }}>{fecha}</td>
-                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>{p?.nombre || r.pacienteNombreSnapshot}</td>
-                  <td style={{ padding: "10px 12px" }}>{r.titulo}</td>
-                  <td style={{ padding: "10px 12px", fontSize: 12 }}>{r.servicioOProducto || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>{fecha}</td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, background: `linear-gradient(135deg, ${C.violet}, ${C.violet}88)`, color: "#fff", fontSize: 10.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {inicialesDoc(nombrePac)}
+                      </div>
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{nombrePac}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, background: "rgba(238,242,255,.8)", color: C.violetDark, border: "1px solid rgba(199,210,254,.6)", borderRadius: 8, padding: "3px 9px" }}>
+                      <FileText size={11}/> {r.titulo}
+                    </span>
+                  </td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted, maxWidth: 280 }}>{r.servicioOProducto || "—"}</td>
                   <td style={{ padding: "10px 12px", fontSize: 12 }}>{emp?.nombre || "—"}</td>
                   <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}>
                     <Btn sm variant="outline" onClick={() => setVer(r)}>Ver</Btn>
@@ -5827,14 +6358,16 @@ function DocumentosConsent({ data, setData, clinicId, clinicNombre, sessionEmail
                         PDF
                       </a>
                     ) : (
-                      <span style={{ marginLeft: 8, fontSize: 11, color: "#94A3B8" }}>—</span>
+                      <span style={{ marginLeft: 8, fontSize: 11, color: "#B45309" }} title="Registro sin PDF firmado — solo texto">solo texto</span>
                     )}
                   </td>
                 </tr>
               )
             })}
-            {rows.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: "center", padding: 28, color: "#94A3B8" }}>Aún no hay consentimientos registrados en esta clínica.</td></tr>
+            {rowsFiltradas.length === 0 && (
+              <tr><td colSpan={6} style={{ textAlign: "center", padding: 28, color: "#94A3B8" }}>
+                {rows.length === 0 ? "Aún no hay consentimientos registrados en esta clínica." : "Sin resultados para esa búsqueda."}
+              </td></tr>
             )}
           </tbody>
         </table>
@@ -7134,7 +7667,7 @@ function PersonalTurnos({ data, setData, role, clinic }) {
   const [openFicha, setOpenFicha] = useState(false)
   const [selEmp, setSelEmp] = useState(null)
   const [histForm, setHistForm] = useState({ titulo:"", detalle:"" })
-  const [formE, setFormE] = useState({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true })
+  const [formE, setFormE] = useState({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true, especialidad:"", comision:"", color:"#6366F1" })
   const [formT, setFormT] = useState({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
   const [empCamOpen, setEmpCamOpen] = useState(false)
   const [empCamErr, setEmpCamErr] = useState("")
@@ -7269,6 +7802,9 @@ function PersonalTurnos({ data, setData, role, clinic }) {
         tel: String(formE.tel || "").trim(),
         rol,
         activo: formE.activo !== false,
+        especialidad: String(formE.especialidad || "").trim(),
+        comision_pct: +formE.comision || 0,
+        color: formE.color || C.violet,
       }
       const { data: ins, error } = await supabase
         .from("empleados")
@@ -7304,13 +7840,13 @@ function PersonalTurnos({ data, setData, role, clinic }) {
         }],
       }))
       setOpenE(false)
-      setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true })
+      setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true, especialidad:"", comision:"", color:"#6366F1" })
       return
     }
     const id = data.empleados.length ? Math.max(...data.empleados.map(e => e.id)) + 1 : 1
     setData(d => ({ ...d, empleados: [...d.empleados, { ...formE, id, clinicId, fotoUrl:"", documento:"", fechaNacimiento:"", direccion:"", fechaIngreso:TODAY, contactoEmergencia:"", telEmergencia:"", notas:"", historial:[] }] }))
     setOpenE(false)
-    setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true })
+    setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true, especialidad:"", comision:"", color:"#6366F1" })
   }
   const delE = async id => {
     if (!window.confirm("¿Eliminar este empleado y sus franjas horarias?")) return
@@ -7513,41 +8049,119 @@ function PersonalTurnos({ data, setData, role, clinic }) {
     return m
   }, [data.turnosLaborales])
 
+  const [buscaEmp, setBuscaEmp] = useState("")
+  const [filtroRol, setFiltroRol] = useState("")
+  const statsEmp = useMemo(() => {
+    const list = data.empleados || []
+    const activos = list.filter(e => e.activo !== false)
+    const porRol = {}
+    for (const e of activos) porRol[e.cargo] = (porRol[e.cargo] || 0) + 1
+    return { total: list.length, activos: activos.length, especialistas: porRol.especialista || 0, porRol }
+  }, [data.empleados])
+  const empleadosFiltrados = useMemo(() => {
+    const q = buscaEmp.trim().toLowerCase()
+    return (data.empleados || []).filter(e => {
+      if (filtroRol && e.cargo !== filtroRol) return false
+      if (!q) return true
+      return String(e.nombre || "").toLowerCase().includes(q)
+        || String(e.email || "").toLowerCase().includes(q)
+        || String(e.especialidad || "").toLowerCase().includes(q)
+    })
+  }, [data.empleados, buscaEmp, filtroRol])
+  const horasSemana = empId => {
+    const franjas = byEmp[empId] || []
+    return franjas.reduce((a, t) => {
+      const [h1, m1] = String(t.entrada || "0:0").split(":").map(Number)
+      const [h2, m2] = String(t.salida || "0:0").split(":").map(Number)
+      return a + Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)) / 60
+    }, 0)
+  }
+  const rolColor = { gerente: "#6B21A8", encargado: "#B45309", especialista: C.violetDark, recepcionista: "#1D4ED8" }
+
   return (
     <div>
-      <div style={{ marginBottom:22 }}>
-        <h2 style={{ fontSize:20, fontWeight:700 }}>Personal y turnos de trabajo</h2>
+      <div style={{ marginBottom:16 }}>
+        <h2 style={{ fontSize:20, fontWeight:800 }}>Personal y turnos de trabajo</h2>
         <p style={{ fontSize:13, color:C.muted, marginTop:2 }}>
-          {readOnly ? "Solo el perfil gerente puede editar esta sección." : "Alta de empleados y franjas horarias semanales."}
+          {readOnly ? "Solo el perfil gerente puede editar esta sección." : "Equipo, fichas, franjas horarias y carga semanal."}
         </p>
       </div>
+
+      {/* KPIs del equipo */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:10, marginBottom:16 }}>
+        {[
+          { label:"Empleados", val: statsEmp.total, color: C.violetDark, bg:"rgba(238,242,255,.85)", bd:"rgba(199,210,254,.7)" },
+          { label:"Activos", val: statsEmp.activos, color:"#047857", bg:"rgba(240,253,244,.85)", bd:"rgba(167,243,208,.7)" },
+          { label:"Especialistas", val: statsEmp.especialistas, color:"#1D4ED8", bg:"rgba(239,246,255,.85)", bd:"rgba(191,219,254,.7)" },
+          { label:"De baja", val: statsEmp.total - statsEmp.activos, color: statsEmp.total - statsEmp.activos ? "#B45309" : C.muted, bg:"rgba(255,251,235,.85)", bd:"rgba(253,230,138,.7)" },
+        ].map(k => (
+          <div key={k.label} style={{ background:k.bg, border:`1px solid ${k.bd}`, borderRadius:14, padding:"12px 16px" }}>
+            <div style={{ fontSize:22, fontWeight:800, color:k.color, lineHeight:1, fontVariantNumeric:"tabular-nums" }}>{k.val}</div>
+            <div style={{ fontSize:10.5, fontWeight:700, color:k.color, marginTop:5, textTransform:"uppercase", letterSpacing:"0.06em", opacity:.85 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
       <TabBar tabs={[{ id:"empleados", label:"Empleados" }, { id:"turnos", label:"Turnos laborales" }]} active={tab} onChange={setTab}/>
 
       {tab==="empleados" && (
         <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:16, gap:10, flexWrap:"wrap" }}>
-            <span style={{ fontSize:14, fontWeight:700 }}>Equipo</span>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14, gap:10, flexWrap:"wrap", alignItems:"center" }}>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", flex:"1 1 320px" }}>
+              <div style={{ position:"relative", flex:"1 1 200px", maxWidth:300 }}>
+                <Search size={13} color={C.muted} style={{ position:"absolute", left:11, top:"50%", transform:"translateY(-50%)" }}/>
+                <input style={{ ...inp, paddingLeft:32, padding:"8px 10px 8px 32px" }} placeholder="Buscar por nombre, email, especialidad…" value={buscaEmp} onChange={e=>setBuscaEmp(e.target.value)}/>
+              </div>
+              <select style={{ ...inp, width:"auto", padding:"8px 10px" }} value={filtroRol} onChange={e=>setFiltroRol(e.target.value)}>
+                <option value="">Todos los roles</option>
+                <option value="gerente">Gerente</option>
+                <option value="encargado">Encargado/a</option>
+                <option value="especialista">Especialista</option>
+                <option value="recepcionista">Recepcionista</option>
+              </select>
+            </div>
             {!readOnly && <Btn onClick={()=>setOpenE(true)} style={{ width: compact ? "100%" : "auto", justifyContent:"center" }}><Plus size={14}/> Nuevo empleado</Btn>}
           </div>
           <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 740 : undefined }}>
-              <THead cols={["Nombre","Rol","Contacto","Estado",""]}/>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 860 : undefined }}>
+              <THead cols={["Empleado","Rol","Contacto","Comisión","Horas/sem.","Estado",""]}/>
               <tbody>
-                {data.empleados.map(e => (
-                  <tr key={e.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
-                    <td style={{ padding:"11px 14px", fontWeight:600, minWidth:160 }}>
-                      <button type="button" onClick={()=>openFichaEmp(e)} style={{ background:"none", border:"none", padding:0, color:C.violet, cursor:"pointer", fontWeight:700, textAlign:"left" }}>
-                        {e.nombre}
+                {empleadosFiltrados.map(e => {
+                  const hs = horasSemana(e.id)
+                  return (
+                  <tr key={e.id} style={{ borderBottom:`1px solid ${C.subtle}`, opacity: e.activo === false ? .55 : 1 }}>
+                    <td style={{ padding:"10px 14px", minWidth:200 }}>
+                      <button type="button" onClick={()=>openFichaEmp(e)} style={{ background:"none", border:"none", padding:0, cursor:"pointer", display:"flex", alignItems:"center", gap:10, textAlign:"left" }}>
+                        <img src={empPhotoSrc(e)} alt="" style={{ width:36, height:36, borderRadius:"50%", objectFit:"cover", border:`2px solid ${e.color || C.violet}`, flexShrink:0 }}/>
+                        <span>
+                          <span style={{ display:"block", fontWeight:700, color:C.violet, fontSize:13.5 }}>{e.nombre}</span>
+                          {String(e.especialidad || "").trim() && <span style={{ display:"block", fontSize:11, color:C.muted }}>{e.especialidad}</span>}
+                        </span>
                       </button>
                     </td>
-                    <td style={{ padding:"11px 14px", minWidth:120 }}><Badge type="gray">{[ROLE_LABEL[e.cargo] || e.cargo, String(e.especialidad || "").trim()].filter(Boolean).join(" — ")}</Badge></td>
-                    <td style={{ padding:"11px 14px", fontSize:12, color:C.muted, minWidth:230 }}>{e.tel} · {e.email}</td>
-                    <td style={{ padding:"11px 14px", minWidth:100 }}><Badge type={e.activo ? "confirmado" : "cancelado"}>{e.activo ? "Activo" : "Baja"}</Badge></td>
-                    <td style={{ padding:"11px 14px", minWidth:70 }}>
+                    <td style={{ padding:"10px 14px", minWidth:120 }}>
+                      <span style={{ fontSize:11.5, fontWeight:700, color: rolColor[e.cargo] || C.muted, background: (rolColor[e.cargo] || C.muted) + "14", border:`1px solid ${(rolColor[e.cargo] || C.muted)}30`, borderRadius:8, padding:"3px 9px" }}>
+                        {ROLE_LABEL[e.cargo] || e.cargo}
+                      </span>
+                    </td>
+                    <td style={{ padding:"10px 14px", fontSize:12, color:C.muted, minWidth:200 }}>
+                      {[e.tel, e.email].filter(Boolean).join(" · ") || "—"}
+                    </td>
+                    <td style={{ padding:"10px 14px", fontSize:12.5, fontWeight:700, minWidth:80, fontVariantNumeric:"tabular-nums" }}>
+                      {+e.comision > 0 ? `${+e.comision} %` : <span style={{ color:C.muted, fontWeight:400 }}>—</span>}
+                    </td>
+                    <td style={{ padding:"10px 14px", fontSize:12.5, minWidth:90, fontVariantNumeric:"tabular-nums" }}>
+                      {hs > 0 ? <strong>{Math.round(hs * 10) / 10} h</strong> : <span style={{ color:"#B45309", fontSize:11.5 }} title="Sin franjas horarias — no aparece en disponibilidad de agenda">sin horario</span>}
+                    </td>
+                    <td style={{ padding:"10px 14px", minWidth:90 }}><Badge type={e.activo ? "confirmado" : "cancelado"}>{e.activo ? "Activo" : "Baja"}</Badge></td>
+                    <td style={{ padding:"10px 14px", minWidth:60 }}>
                       {!readOnly && <Btn variant="danger" sm onClick={()=>delE(e.id)}><Trash2 size={11}/></Btn>}
                     </td>
                   </tr>
-                ))}
+                )})}
+                {empleadosFiltrados.length === 0 && (
+                  <tr><td colSpan={7} style={{ textAlign:"center", padding:26, color:"#94A3B8", fontSize:13 }}>Sin resultados.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -7560,20 +8174,31 @@ function PersonalTurnos({ data, setData, role, clinic }) {
             <span style={{ fontSize:14, fontWeight:700 }}>Franjas por empleado</span>
             {!readOnly && <Btn onClick={()=>setOpenT(true)}><Plus size={14}/> Asignar turno</Btn>}
           </div>
-          {data.empleados.map(e => (
-            <div key={e.id} style={{ marginBottom:18, paddingBottom:18, borderBottom:`1px solid ${C.subtle}` }}>
-              <div style={{ fontWeight:700, marginBottom:8 }}>{e.nombre}</div>
+          {data.empleados.map(e => {
+            const hs = horasSemana(e.id)
+            return (
+            <div key={e.id} style={{ marginBottom:16, padding:"14px 16px", borderRadius:12, background:"rgba(255,255,255,.6)", border:`1px solid ${C.border}` }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+                <img src={empPhotoSrc(e)} alt="" style={{ width:30, height:30, borderRadius:"50%", objectFit:"cover", border:`2px solid ${e.color || C.violet}` }}/>
+                <span style={{ fontWeight:700, fontSize:13.5 }}>{e.nombre}</span>
+                <span style={{ fontSize:11.5, color:C.muted }}>{ROLE_LABEL[e.cargo] || e.cargo}</span>
+                {hs > 0 && <span style={{ marginLeft:"auto", fontSize:11.5, fontWeight:700, color:C.violetDark, background:"rgba(238,242,255,.9)", border:"1px solid rgba(199,210,254,.7)", borderRadius:8, padding:"3px 9px", fontVariantNumeric:"tabular-nums" }}>{Math.round(hs * 10) / 10} h/semana</span>}
+              </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-                {(byEmp[e.id]||[]).sort((a,b)=>a.diaSemana-b.diaSemana).map(t => (
-                  <span key={t.id} style={{ background:C.subtle, padding:"6px 12px", borderRadius:8, fontSize:12, display:"inline-flex", alignItems:"center", gap:8 }}>
-                    {DIA_SEMANA[t.diaSemana]} · {t.entrada}–{t.salida}
-                    {!readOnly && <button type="button" onClick={()=>delT(t.id)} style={{ border:"none", background:"transparent", cursor:"pointer", color:C.danger }}><X size={12}/></button>}
-                  </span>
-                ))}
-                {(!byEmp[e.id] || byEmp[e.id].length===0) && <span style={{ fontSize:12, color:"#94A3B8" }}>Sin franjas cargadas</span>}
+                {[1,2,3,4,5,6,0].map(dia => {
+                  const franjas = (byEmp[e.id] || []).filter(t => +t.diaSemana === dia).sort((a,b)=>String(a.entrada).localeCompare(String(b.entrada)))
+                  if (!franjas.length) return null
+                  return franjas.map(t => (
+                    <span key={t.id} style={{ background:"rgba(238,242,255,.7)", border:"1px solid rgba(199,210,254,.6)", padding:"6px 12px", borderRadius:8, fontSize:12, display:"inline-flex", alignItems:"center", gap:8, fontWeight:600, color:C.violetDark }}>
+                      {DIA_SEMANA[t.diaSemana]} · {t.entrada}–{t.salida}
+                      {!readOnly && <button type="button" onClick={()=>delT(t.id)} style={{ border:"none", background:"transparent", cursor:"pointer", color:C.danger, padding:0, display:"flex" }}><X size={12}/></button>}
+                    </span>
+                  ))
+                })}
+                {(!byEmp[e.id] || byEmp[e.id].length===0) && <span style={{ fontSize:12, color:"#B45309" }}>Sin franjas cargadas — no aparece disponible en la agenda</span>}
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
@@ -7591,6 +8216,11 @@ function PersonalTurnos({ data, setData, role, clinic }) {
           </FG>
           <FG label="Teléfono"><input style={inp} value={formE.tel} onChange={e=>ue("tel",e.target.value)}/></FG>
           <FG label="Email"><input style={inp} value={formE.email} onChange={e=>ue("email",e.target.value)}/></FG>
+          <FG label="Especialidad"><input style={inp} value={formE.especialidad} onChange={e=>ue("especialidad",e.target.value)} placeholder="Ej: medicina estética, láser…"/></FG>
+          <FG label="Comisión (%)"><input type="number" min="0" max="100" style={inp} value={formE.comision} onChange={e=>ue("comision",e.target.value)} placeholder="0"/></FG>
+          <FG label="Color en agenda">
+            <input type="color" value={formE.color} onChange={e=>ue("color",e.target.value)} style={{ width:56, height:36, border:`1px solid ${C.border}`, borderRadius:8, padding:2, background:"#fff", cursor:"pointer" }}/>
+          </FG>
         </div>
       </Modal>
 
@@ -8643,8 +9273,10 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
 
   const movs = (data.tpv?.movimientos || []).filter(m => m.clinicId === clinic).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id)
   const sesiones = (data.tpv?.sesiones || []).filter(s => s.clinicId === clinic)
-  const sesionAbierta = sesiones.find(s => s.estado === "abierta") || null
-  const ultimoCierre = sesiones.find(s => s.estado === "cerrada") || null
+  const sesionAbierta = sesiones.find(s => s.estado === "abierta" && +s.clinicId === +clinic) || null
+  const ultimoCierre = [...sesiones]
+    .filter(s => s.estado === "cerrada")
+    .sort((a, b) => String(b.cierreAt || b.fecha || "").localeCompare(String(a.cierreAt || a.fecha || "")))[0] || null
   const hoyMovs = movs.filter(m => m.fecha === TODAY)
 
   const sumMovs = (list, metodo) => list.filter(m => !metodo || m.metodo === metodo).reduce((a, m) => a + m.monto, 0)
@@ -8757,24 +9389,32 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
       ? `${carrito[0].nombre}${carrito[0].cantidad > 1 ? ` ×${carrito[0].cantidad}` : ""}`
       : `Ticket (${carrito.length} ítems): ` + carrito.map(x => `${x.nombre}×${x.cantidad}`).join(" · ")
     const comp = comprobanteExtra.trim() || `VTPV-${Date.now()}`
+    // Si falla la BD, NO actualizar el estado local — antes el error era silencioso
     if (import.meta.env.VITE_SUPABASE_URL) {
-      await supabase.from("tpv_movimientos").insert({
-        fecha: TODAY,
-        clinic_id: clinic,
-        metodo,
-        monto: totalCarrito,
-        concepto,
-        comprobante: comp,
-        tipo: "ingreso",
-      })
-      await supabase.from("clinic_movimientos").insert({
-        clinic_id: clinic,
-        tipo: "ingreso",
-        fecha: TODAY,
-        concepto,
-        cat: "servicios",
-        monto: totalCarrito,
-      })
+      try {
+        const { error: e1 } = await supabase.from("tpv_movimientos").insert({
+          fecha: TODAY,
+          clinic_id: clinic,
+          metodo,
+          monto: totalCarrito,
+          concepto,
+          comprobante: comp,
+          tipo: "ingreso",
+        })
+        if (e1) throw e1
+        const { error: e2 } = await supabase.from("clinic_movimientos").insert({
+          clinic_id: clinic,
+          tipo: "ingreso",
+          fecha: TODAY,
+          concepto,
+          cat: "servicios",
+          monto: totalCarrito,
+        })
+        if (e2) throw e2
+      } catch (e) {
+        alert("No se pudo registrar el cobro: " + (e?.message || e) + "\nRevisá la conexión e intentá de nuevo.")
+        return
+      }
     }
     setData(d => {
       const tid = d.tpv?.movimientos?.length ? Math.max(...d.tpv.movimientos.map(x => x.id)) + 1 : 1
@@ -8804,6 +9444,7 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
     })
     setCarrito([])
     setComprobanteExtra("")
+    await onPersist?.()
   }
 
   const registrarSalida = async () => {
@@ -8940,7 +9581,10 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
   }
 
   const cerrarCaja = async () => {
-    if (!sesionAbierta) return
+    if (!sesionAbierta) {
+      alert("No hay caja abierta para cerrar.")
+      return
+    }
     const tarjeta = parseFloat(String(cierreTarjeta).replace(",", ".")) || 0
     const transferencia = parseFloat(String(cierreTransferencia).replace(",", ".")) || 0
     const banco = parseFloat(String(cierreBanco).replace(",", ".")) || 0
@@ -9012,9 +9656,13 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
   }
 
   const iniciarCierre = () => {
+    if (!sesionAbierta) {
+      alert("No hay caja abierta para cerrar.")
+      return
+    }
     setConteoCierre(emptyConteoEur())
-    setCierreTarjeta(String(teoricoCierre.tarjeta || ""))
-    setCierreTransferencia(String(teoricoCierre.transferencia || ""))
+    setCierreTarjeta(String(Math.max(0, +teoricoCierre.tarjeta || 0)))
+    setCierreTransferencia(String(Math.max(0, +teoricoCierre.transferencia || 0)))
     setCierreBanco("")
     setNotasCierre("")
     setOpenCierre(true)
