@@ -12,7 +12,7 @@ import {
   CreditCard, Gift, Globe, BarChart3, ShoppingCart, Bell, MonitorPlay, QrCode, Copy, Menu, Smartphone,
   Banknote, Wallet, Delete, Minus, Mic, Loader2, Camera, ScanLine, Square,
   CheckCircle2, Building2, Settings, UserPlus, Pencil, Eraser, Undo2, RotateCcw, Link2, ImagePlus,
-  ChevronRight, ChevronLeft, ClipboardCheck, Activity,
+  ChevronRight, ChevronLeft, ClipboardCheck, Activity, Send, Target,
 } from "lucide-react"
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -23,6 +23,7 @@ import { textoAHtmlParrafos, armarCuerpoConsentimiento, rellenarPlantilla, varsD
 import { buildConsentimientoPdfDataUrl, uploadConsentPdfDataUrl, downloadPdfFromArchivedHtml } from "./consentimientos/consentimientoPdf.js"
 import { getPlantillasConsentLocales, mergePlantillasConsent } from "./consentimientos/plantillasLocales.js"
 import { SignaturePad } from "./consentimientos/SignaturePad.jsx"
+import { MarketingCentroPanel } from "./marketing/MarketingCentro.jsx"
 import {
   startFaceProportionOverlay,
   detectFaceMeshOnImage,
@@ -35,74 +36,170 @@ import {
 const TODAY = new Date().toISOString().split("T")[0]
 
 /**
- * DeepFace endpoints.
- *
- * - En dev local (npm run dev) usamos los middlewares de Vite: `/api/deepface*`.
- * - En producción (Vercel) no existen esos middlewares. Si VITE_DEEPFACE_URL está
- *   definida (p. ej. https://clinicabetty.onrender.com), el frontend llama directo
- *   a ese servicio HTTP.
- *
- * El análisis clínico-estético combinado (DeepFace + OpenAI Vision) solo funciona
- * con el middleware local. En producción se devuelve solo el resultado de DeepFace
- * y `clinicoError` avisa que se necesita un backend con la key de OpenAI.
- */
-const FACE_REMOTE_URL = String(import.meta.env?.VITE_DEEPFACE_URL || "").replace(/\/+$/, "")
-const FACE_REMOTE_TOKEN = String(import.meta.env?.VITE_DEEPFACE_TOKEN || "")
-const FACE_ANALYZE_URL = FACE_REMOTE_URL ? `${FACE_REMOTE_URL}/analyze` : "/api/deepface"
-const FACE_STATUS_URL = FACE_REMOTE_URL ? `${FACE_REMOTE_URL}/status` : "/api/deepface/status"
-
-/** Headers comunes para el servicio DeepFace remoto. */
-function faceRemoteHeaders() {
-  const h = { "Content-Type": "application/json" }
-  if (FACE_REMOTE_TOKEN) h["Authorization"] = `Bearer ${FACE_REMOTE_TOKEN}`
-  return h
-}
-
-/**
- * Llama al análisis facial "full" (DeepFace + comentario clínico IA).
- * En dev va al middleware /api/face-analysis/full; en prod hace fallback a
- * DeepFace-only contra el servicio remoto.
- *
- * Devuelve { ok, face_found, deepface, clinico, clinicoError, error? }.
+ * Análisis clínico-estético del rostro (OpenAI Vision vía backend).
+ * Devuelve { ok, face_found, clinico, clinicoError, error? }.
  */
 async function callFaceAnalysisFull(imageB64, opts = {}) {
   const includeAi = opts.includeAi !== false
-  if (!FACE_REMOTE_URL) {
-    try {
-      const r = await fetch("/api/face-analysis/full", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: imageB64, includeAi }),
-      })
-      const j = await r.json().catch(() => null)
-      if (!r.ok || !j?.ok) {
-        return { ok: false, error: j?.error || `Error ${r.status}`, status: r.status }
-      }
-      return j
-    } catch (e) {
-      return { ok: false, error: String(e?.message || e) }
-    }
-  }
   try {
-    const r = await fetch(`${FACE_REMOTE_URL}/analyze`, {
+    const r = await fetch("/api/face-analysis/full", {
       method: "POST",
-      headers: faceRemoteHeaders(),
-      body: JSON.stringify({ image_base64: imageB64 }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_base64: imageB64, includeAi }),
     })
     const j = await r.json().catch(() => null)
     if (!r.ok || !j?.ok) {
-      return { ok: false, error: j?.error || j?.detail || `Error ${r.status}`, status: r.status }
+      return { ok: false, error: j?.error || j?.clinicoError || `Error ${r.status}`, status: r.status }
     }
-    return {
-      ok: true,
-      face_found: j.face_found !== false,
-      deepface: j,
-      clinico: null,
-      clinicoError: "Análisis clínico-estético con IA deshabilitado en producción (falta proxy de OpenAI). DeepFace OK.",
-    }
+    return j
   } catch (e) {
     return { ok: false, error: String(e?.message || e) }
   }
+}
+
+/** Plan clínico + preview en zonas (gpt-image-2 con máscara). */
+async function callTreatmentPreview(imageB64, opts = {}) {
+  try {
+    const r = await fetch("/api/treatment-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_base64: imageB64,
+        tratamiento: String(opts.tratamiento || "").trim(),
+        zona: opts.zona || "facial",
+        mime: opts.mime || "image/jpeg",
+        mask_base64: opts.mask_base64 || undefined,
+        plan: opts.plan || undefined,
+        render: opts.render === true,
+      }),
+    })
+    const j = await r.json().catch(() => null)
+    if (!r.ok || !j?.ok) {
+      return { ok: false, error: j?.error || `Error ${r.status}`, status: r.status }
+    }
+    return j
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) }
+  }
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error("No se pudo cargar la imagen"))
+    img.src = src
+  })
+}
+
+/** Máscara PNG: opaco = conservar, transparente = zona a editar (gpt-image-2). */
+async function buildTreatmentMaskBase64(imageSrc, plan) {
+  const img = await loadImageElement(imageSrc)
+  const w = img.naturalWidth
+  const h = img.naturalHeight
+  if (!w || !h) throw new Error("Imagen sin dimensiones")
+  const cv = document.createElement("canvas")
+  cv.width = w
+  cv.height = h
+  const ctx = cv.getContext("2d")
+  ctx.fillStyle = "rgba(255,255,255,1)"
+  ctx.fillRect(0, 0, w, h)
+  ctx.globalCompositeOperation = "destination-out"
+  for (const z of plan?.zonasMarcado || []) {
+    ctx.beginPath()
+    ctx.ellipse(
+      (z.x / 100) * w,
+      (z.y / 100) * h,
+      ((z.rx || 8) / 100) * w * 0.5,
+      ((z.ry || 6) / 100) * h * 0.5,
+      0, 0, Math.PI * 2,
+    )
+    ctx.fill()
+  }
+  return dataUrlToBase64(cv.toDataURL("image/png"))
+}
+
+function dataUrlToBase64(dataUrl) {
+  const s = String(dataUrl || "")
+  const i = s.indexOf(",")
+  return i >= 0 ? s.slice(i + 1) : s
+}
+
+/** Foto del paciente + marcado clínico de zonas (misma imagen, sin IA generativa). */
+function FotoConPlanTratamiento({ src, plan, alt, maxHeight = 280 }) {
+  const wrapRef = useRef(null)
+  const imgRef = useRef(null)
+  const [box, setBox] = useState(null)
+  const zonas = Array.isArray(plan?.zonasMarcado) ? plan.zonasMarcado : []
+
+  useEffect(() => {
+    const sync = () => {
+      const img = imgRef.current
+      const wrap = wrapRef.current
+      if (!img || !wrap || !img.complete || !img.naturalWidth) return
+      const wr = wrap.getBoundingClientRect()
+      const ir = img.getBoundingClientRect()
+      setBox({
+        left: ir.left - wr.left,
+        top: ir.top - wr.top,
+        width: ir.width,
+        height: ir.height,
+      })
+    }
+    sync()
+    const t = window.setTimeout(sync, 50)
+    window.addEventListener("resize", sync)
+    const img = imgRef.current
+    img?.addEventListener("load", sync)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener("resize", sync)
+      img?.removeEventListener("load", sync)
+    }
+  }, [src, plan])
+
+  return (
+    <div ref={wrapRef} style={{ position:"relative", width:"100%", minHeight:120, display:"flex", justifyContent:"center", alignItems:"center", background:"#0f172a", borderRadius:10 }}>
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt || ""}
+        style={{ maxWidth:"100%", maxHeight, objectFit:"contain", borderRadius:10, display:"block" }}
+      />
+      {box && zonas.length > 0 && (
+        <svg
+          style={{ position:"absolute", left:box.left, top:box.top, width:box.width, height:box.height, pointerEvents:"none" }}
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+        >
+          {zonas.map((z, i) => (
+            <g key={z.id || i}>
+              <ellipse
+                cx={z.x}
+                cy={z.y}
+                rx={z.rx || 8}
+                ry={z.ry || 6}
+                fill="rgba(52,211,153,.18)"
+                stroke="#34d399"
+                strokeWidth="0.55"
+              />
+              <text
+                x={z.x}
+                y={Math.max(3.5, z.y - (z.ry || 6) - 1.2)}
+                fill="#ecfdf5"
+                fontSize="3.2"
+                fontWeight="700"
+                textAnchor="middle"
+                style={{ paintOrder:"stroke", stroke:"rgba(15,23,42,.85)", strokeWidth:0.35 }}
+              >
+                {z.label}
+              </text>
+            </g>
+          ))}
+        </svg>
+      )}
+    </div>
+  )
 }
 
 /** Importes en EUR (referencia mercado UE; sustituir por vuestra tarifa). */
@@ -113,6 +210,24 @@ const fmt = n => {
 }
 const fmtDate = d => { if (!d) return ""; const [y, m, day] = d.split("-"); return `${day}/${m}/${y}` }
 const catLabel = { valoracion:"Valoración", clinico:"Clínico", facial:"Facial", corporal:"Corporal", laser:"Láser", botox:"Bótox", general:"General", servicios:"Servicios", insumos:"Insumos", salarios:"Salarios", alquiler:"Alquiler", equipos:"Equipos", otros:"Otros" }
+const tpvSalidaTipoLabel = {
+  proveedores: "Proveedor / compra",
+  nomina: "Nómina / personal",
+  gastos_operativos: "Gasto operativo",
+  retiro_tesoreria: "Retiro a banco / tesorería",
+  devolucion: "Devolución a cliente",
+  caja_chica: "Caja chica",
+  otros: "Otra salida",
+}
+const TPV_SALIDA_TIPOS = [
+  { id: "proveedores", label: tpvSalidaTipoLabel.proveedores, catContable: "insumos" },
+  { id: "nomina", label: tpvSalidaTipoLabel.nomina, catContable: "salarios" },
+  { id: "gastos_operativos", label: tpvSalidaTipoLabel.gastos_operativos, catContable: "otros" },
+  { id: "retiro_tesoreria", label: tpvSalidaTipoLabel.retiro_tesoreria, catContable: "otros" },
+  { id: "devolucion", label: tpvSalidaTipoLabel.devolucion, catContable: "servicios" },
+  { id: "caja_chica", label: tpvSalidaTipoLabel.caja_chica, catContable: "otros" },
+  { id: "otros", label: tpvSalidaTipoLabel.otros, catContable: "otros" },
+]
 const estadoLabel = {
   pendiente:"Pendiente", confirmado:"Confirmado", en_sala:"En sala", en_curso:"En curso",
   listo_cobrar:"Listo p/ cobrar", finalizado:"Finalizado", cancelado:"Cancelado",
@@ -144,7 +259,7 @@ function mediaInsecureContextHint() {
   if (window.isSecureContext) return ""
   const h = window.location?.hostname || ""
   if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return ""
-  return " En el móvil, si abrís la app por http://IP (Wi‑Fi), el micrófono suele estar bloqueado: usá https (p. ej. VITE_DEV_HTTPS=true en .env.local), un túnel (ngrok, Cloudflare) o accedé por https desde producción. En PC podés usar http://localhost:5173."
+  return " En el móvil, si abrís la app por http://IP (Wi‑Fi), el micrófono suele estar bloqueado: activá VITE_DEV_HTTPS=true en .env, reiniciá npm run dev y abrí https://TU_IP:3000 (aceptá el certificado). También podés usar un túnel o producción."
 }
 
 /** HTTP por IP (p. ej. http://192.168.x.x) no es contexto seguro: el navegador oculta el micrófono. */
@@ -340,7 +455,7 @@ const SECTION_ROLES = {
   contabilidad:  ["encargado","gerente"],
   servicios:     ["encargado","gerente","especialista"],
   personal:      ["encargado","gerente"],
-  bonos:         ["recepcionista","especialista","encargado","gerente"],
+  bonos:         ["recepcionista","encargado","gerente"],
   tpv:           ["recepcionista","encargado","gerente"],
   marketing:     ["recepcionista","especialista","encargado","gerente"],
   reportes:      ["recepcionista","especialista","encargado","gerente"],
@@ -355,6 +470,22 @@ function canAccess(role, section) {
   const r = normalizeRol(role)
   return SECTION_ROLES[section]?.includes(r)
 }
+
+/** Recepción / contable (encargado) / gerente: check-in de bono (marcar sesión + cobro). */
+function puedeCheckinBonoCaja(role) {
+  const r = normalizeRol(role)
+  return r === "recepcionista" || r === "encargado" || r === "gerente"
+}
+
+function puedeAdministrarBonos(role) {
+  return puedeCheckinBonoCaja(role)
+}
+
+function puedeEliminarBonos(role) {
+  const r = normalizeRol(role)
+  return r === "encargado" || r === "gerente"
+}
+
 function loadSession() {
   try {
     const j = sessionStorage.getItem(SESSION_KEY)
@@ -772,9 +903,11 @@ function cerrarOrdenServicioEnEstado(d, { clinic, turno, servicioId, servicioIds
         } : t),
       },
     },
-    historialClinico: nuevoHist,
+    historialClinico: import.meta.env.VITE_SUPABASE_URL ? d.historialClinico : nuevoHist,
     pacientes: pacientesN,
-    alertasCobro: [...(d.alertasCobro || []), {
+    alertasCobro: import.meta.env.VITE_SUPABASE_URL
+      ? (d.alertasCobro || [])
+      : [...(d.alertasCobro || []), {
       id: alertId,
       clinicId: clinic,
       turnoId: turno.id,
@@ -790,6 +923,254 @@ function cerrarOrdenServicioEnEstado(d, { clinic, turno, servicioId, servicioIds
       creado: new Date().toISOString(),
     }],
   }
+}
+
+function cajaAbiertaParaClinic(data, clinic) {
+  return (data.tpv?.sesiones || []).some(s => +s.clinicId === +clinic && s.estado === "abierta")
+}
+
+function buildDetalleHistorialAtencion({ evaluacionPrevia, resultadoSesion, nombresServicios, protocolo, detalleInsumos, notas }) {
+  const textoInsumos = detalleInsumos.length
+    ? detalleInsumos.map(x => `${x.nombre} ×${x.cantidad} ${x.unidad || ""}`).join("; ")
+    : "Sin consumibles registrados"
+  const ev = evaluacionPrevia?.trim() ? `Evaluación: ${evaluacionPrevia.trim()}. ` : ""
+  const resPost = String(resultadoSesion || "").trim()
+  return `${ev}${resPost ? `Resultado inmediato: ${resPost}. ` : ""}Servicios facturados: ${nombresServicios}. Orden de servicio. Protocolo: ${String(protocolo).trim()}. ${textoInsumos}. Notas: ${String(notas || "").trim() || "—"}`
+}
+
+async function persistirAtencionEnSupabase({
+  pacienteId, turno, nombresServicios, detalleHist, nombreProfesional,
+  notas, protocolo, alergiasNuevas, tratamientosNuevos, notasClinicasAppend,
+}) {
+  if (!import.meta.env.VITE_SUPABASE_URL || !pacienteId) return { ok: true, historialId: null }
+  const { data: histRow, error: eHist } = await supabase.from("historial_clinico").insert({
+    cliente_id: pacienteId,
+    fecha: TODAY,
+    tipo: "tratamiento",
+    titulo: `${nombresServicios} — sesión`,
+    detalle: detalleHist,
+    profesional: nombreProfesional || "Especialista",
+  }).select("id, cliente_id, fecha, tipo, titulo, detalle, profesional").single()
+  if (eHist) return { ok: false, error: eHist.message }
+
+  const { data: pac, error: ePac } = await supabase
+    .from("clientes")
+    .select("visitas, alergias, tratamientos_activos, notas_clinicas")
+    .eq("id", pacienteId)
+    .single()
+  if (ePac) return { ok: false, error: ePac.message, historialId: histRow?.id }
+
+  const prevVisitas = Array.isArray(pac.visitas) ? pac.visitas : []
+  const nextVisitaId = prevVisitas.length ? Math.max(...prevVisitas.map(v => +v.id || 0)) + 1 : 1
+  const visita = {
+    id: nextVisitaId,
+    fecha: TODAY,
+    motivo: nombresServicios || turno?.servicio || "Consulta",
+    profesionalId: turno?.profesionalId || null,
+    estado: "realizado",
+    notas: String(notas || "").trim(),
+    protocolo: String(protocolo || "").trim(),
+    turnoId: turno?.id,
+  }
+  const prevAlergias = Array.isArray(pac.alergias) ? pac.alergias : []
+  const prevTx = Array.isArray(pac.tratamientos_activos) ? pac.tratamientos_activos : []
+  const { error: eUpd } = await supabase.from("clientes").update({
+    es_paciente: true,
+    visitas: [...prevVisitas, visita],
+    alergias: [...new Set([...prevAlergias, ...(alergiasNuevas || [])])],
+    tratamientos_activos: [...new Set([...prevTx, ...(tratamientosNuevos || [])])],
+    notas_clinicas: [String(pac.notas_clinicas || "").trim(), notasClinicasAppend].filter(Boolean).join("\n"),
+  }).eq("id", pacienteId)
+  if (eUpd) return { ok: false, error: eUpd.message, historialId: histRow?.id }
+  return { ok: true, historialId: histRow.id, historialRow: histRow }
+}
+
+async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cliente, montoTotal, montoServicio, montoInsumos, metodo, comprobante }) {
+  if (!turnoId || !(montoTotal > 0)) return
+  const ms = Math.max(0, +(montoServicio ?? montoTotal) || 0)
+  const mi = Math.max(0, +(montoInsumos ?? 0) || 0)
+  const conceptoBase = `Cobro turno #${turnoId} — ${cliente || "Paciente"}`
+  const comp = comprobante || `AUTO-TURNO-${turnoId}`
+
+  if (import.meta.env.VITE_SUPABASE_URL) {
+    try {
+      const { data: tpvExists } = await supabase.from("tpv_movimientos").select("id").eq("comprobante", comp).limit(1)
+      if (!tpvExists?.length) {
+        await supabase.from("tpv_movimientos").insert({
+          fecha,
+          clinic_id: clinic,
+          metodo: metodo || "efectivo",
+          monto: montoTotal,
+          concepto: conceptoBase,
+          comprobante: comp,
+          tipo: "ingreso",
+        })
+      }
+    } catch (e) { console.warn("[cobro] tpv_movimientos:", e?.message || e) }
+    try {
+      const conceptoSrv = `${conceptoBase} — servicio`
+      const { data: srvExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).eq("concepto", conceptoSrv).limit(1)
+      if (!srvExists?.length && ms > 0) {
+        await supabase.from("clinic_movimientos").insert({
+          clinic_id: clinic,
+          tipo: "ingreso",
+          fecha,
+          concepto: conceptoSrv,
+          cat: "servicios",
+          monto: ms,
+        })
+      }
+      if (mi > 0) {
+        const conceptoIns = `${conceptoBase} — insumos`
+        const { data: insExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).eq("concepto", conceptoIns).limit(1)
+        if (!insExists?.length) {
+          await supabase.from("clinic_movimientos").insert({
+            clinic_id: clinic,
+            tipo: "ingreso",
+            fecha,
+            concepto: conceptoIns,
+            cat: "materiales",
+            monto: mi,
+          })
+        }
+      }
+      if (ms <= 0 && mi <= 0) {
+        const { data: legacyExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).ilike("concepto", `%turno #${turnoId}%`).limit(1)
+        if (!legacyExists?.length) {
+          await supabase.from("clinic_movimientos").insert({
+            clinic_id: clinic,
+            tipo: "ingreso",
+            fecha,
+            concepto: conceptoBase,
+            cat: "servicios",
+            monto: montoTotal,
+          })
+        }
+      }
+    } catch (e) { console.warn("[cobro] clinic_movimientos:", e?.message || e) }
+  }
+
+  setData(d => {
+    const tpvMovs = d.tpv?.movimientos || []
+    const clinicMovs = d.clinics[clinic]?.movimientos || []
+    const hasTpv = tpvMovs.some(m => m.comprobante === comp)
+    const hasSrv = clinicMovs.some(m => m.concepto === `${conceptoBase} — servicio`)
+    const hasIns = mi > 0 && clinicMovs.some(m => m.concepto === `${conceptoBase} — insumos`)
+    const hasLegacy = clinicMovs.some(m => String(m.concepto || "").toLowerCase().includes(`turno #${turnoId}`))
+    const nextTpvId = tpvMovs.length ? Math.max(...tpvMovs.map(m => m.id || 0)) + 1 : 1
+    let nextClinicId = clinicMovs.length ? Math.max(...clinicMovs.map(m => m.id || 0)) + 1 : 1
+    const nuevosMovs = []
+    if (!hasSrv && ms > 0) {
+      nuevosMovs.push({ id: nextClinicId++, tipo: "ingreso", fecha, concepto: `${conceptoBase} — servicio`, cat: "servicios", monto: ms })
+    }
+    if (!hasIns && mi > 0) {
+      nuevosMovs.push({ id: nextClinicId++, tipo: "ingreso", fecha, concepto: `${conceptoBase} — insumos`, cat: "materiales", monto: mi })
+    }
+    if (!hasLegacy && !nuevosMovs.length && montoTotal > 0) {
+      nuevosMovs.push({ id: nextClinicId++, tipo: "ingreso", fecha, concepto: conceptoBase, cat: "servicios", monto: montoTotal })
+    }
+    return {
+      ...d,
+      tpv: {
+        ...d.tpv,
+        movimientos: hasTpv
+          ? tpvMovs
+          : [...tpvMovs, { id: nextTpvId, fecha, clinicId: clinic, metodo: metodo || "efectivo", monto: montoTotal, concepto: conceptoBase, comprobante: comp, tipo: "ingreso" }],
+      },
+      clinics: {
+        ...d.clinics,
+        [clinic]: {
+          ...d.clinics[clinic],
+          movimientos: nuevosMovs.length ? [...clinicMovs, ...nuevosMovs] : clinicMovs,
+        },
+      },
+    }
+  })
+}
+
+async function ejecutarCobroTurno({
+  data, setData, clinic, turnoId, alertCobro, turno,
+  montoTotal, montoServicio, montoInsumos, metodo, onPersist, requireCaja = true,
+}) {
+  if (requireCaja && !cajaAbiertaParaClinic(data, clinic)) {
+    alert("La caja está cerrada. Abrí la caja en TPV → Apertura / Cierre antes de cobrar.")
+    return { ok: false, reason: "caja_cerrada" }
+  }
+  if (!turnoId || !(montoTotal > 0)) return { ok: false, reason: "invalid" }
+  const fecha = turno?.fecha || TODAY
+  const cliente = turno?.cliente || alertCobro?.paciente || "Paciente"
+  const ms = montoServicio ?? alertCobro?.montoServicio ?? montoTotal
+  const mi = montoInsumos ?? alertCobro?.montoInsumos ?? 0
+
+  if (import.meta.env.VITE_SUPABASE_URL) {
+    let { error: eTurno } = await supabase.from("turnos").update({ estado: "finalizado", metodo_pago: metodo }).eq("id", turnoId)
+    if (eTurno?.message?.includes("metodo_pago")) {
+      ({ error: eTurno } = await supabase.from("turnos").update({ estado: "finalizado" }).eq("id", turnoId))
+    }
+    if (eTurno) {
+      alert(eTurno.message || "No se pudo cerrar el cobro.")
+      return { ok: false, reason: "turno" }
+    }
+    if (alertCobro?.id && typeof alertCobro.id === "number") {
+      await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("id", alertCobro.id)
+    } else {
+      await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("turno_id", turnoId).eq("estado", "pendiente")
+    }
+  }
+
+  await registrarIngresoCobroTurno({
+    setData, clinic, turnoId, fecha, cliente, montoTotal, montoServicio: ms, montoInsumos: mi, metodo, comprobante: `AUTO-TURNO-${turnoId}`,
+  })
+
+  setData(d => ({
+    ...d,
+    alertasCobro: (d.alertasCobro || []).map(a =>
+      (+a.turnoId === +turnoId && a.estado === "pendiente") ? { ...a, estado: "cobrado", metodoPago: metodo } : a
+    ),
+    clinics: {
+      ...d.clinics,
+      [clinic]: {
+        ...d.clinics[clinic],
+        turnos: (d.clinics[clinic]?.turnos || []).map(t => (t.id === turnoId ? { ...t, estado: "finalizado" } : t)),
+      },
+    },
+  }))
+
+  if (onPersist) await onPersist()
+  return { ok: true }
+}
+
+async function sincronizarAlertaCobroDesdeDb(setData, turnoId) {
+  if (!import.meta.env.VITE_SUPABASE_URL || !turnoId) return
+  const { data: row } = await supabase
+    .from("alertas_cobro")
+    .select("id, clinic_id, turno_id, cliente, servicio, servicio_id, monto_servicio, monto_insumos, monto_total, insumos, estado, metodo_pago, creado")
+    .eq("turno_id", turnoId)
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (!row) return
+  setData(d => {
+    const rest = (d.alertasCobro || []).filter(a => +a.turnoId !== +turnoId)
+    return {
+      ...d,
+      alertasCobro: [...rest, {
+        id: row.id,
+        clinicId: row.clinic_id,
+        turnoId: row.turno_id,
+        paciente: row.cliente || "",
+        servicio: row.servicio || "",
+        servicioId: row.servicio_id,
+        montoServicio: +row.monto_servicio || 0,
+        montoInsumos: +row.monto_insumos || 0,
+        montoTotal: +row.monto_total || 0,
+        insumos: Array.isArray(row.insumos) ? row.insumos : [],
+        estado: row.estado || "pendiente",
+        metodoPago: row.metodo_pago || null,
+        creado: row.creado || null,
+      }],
+    }
+  })
 }
 
 function downloadXlsx(sheetName, rows, filename) {
@@ -848,11 +1229,80 @@ function mergeQtyMaps(base, extra) {
   const out = { ...(base || {}) }
   for (const [k, v] of Object.entries(extra || {})) {
     const sid = +k
-    const n = Math.max(0, parseInt(v, 10) || 0)
+    const n = Math.max(0, parseFloat(v) || 0)
     if (!sid || n <= 0) continue
     out[sid] = (out[sid] || 0) + n
   }
   return out
+}
+
+/** Suma materiales de uno o varios servicios del catálogo. */
+function qtyMapFromServicios(servicios) {
+  const out = {}
+  for (const srv of servicios || []) {
+    const m = qtyMapFromMaterialesServicio(srv)
+    for (const [k, v] of Object.entries(m)) {
+      const id = +k
+      out[id] = (out[id] || 0) + (+v || 0)
+    }
+  }
+  return out
+}
+
+/**
+ * Delta de stock al cerrar atención.
+ * Positivo = descontar; negativo = devolver (p. ej. vial parcial).
+ * Asume que qtyBaseInicial ya se descontó al iniciar la sesión.
+ */
+function calcularDeltaStockAtencion({ qtyBaseInicial, qtyPlanificado, qtyExtras, qtyReal }) {
+  const delta = {}
+  for (const [k, v] of Object.entries(qtyPlanificado || {})) {
+    const id = +k
+    const planned = Math.max(0, +v || 0)
+    const reserved = Math.max(0, +(qtyBaseInicial?.[id] || 0))
+    if (planned > reserved) delta[id] = (delta[id] || 0) + (planned - reserved)
+  }
+  for (const [k, v] of Object.entries(qtyExtras || {})) {
+    const n = Math.max(0, +v || 0)
+    if (n > 0) delta[+k] = (delta[+k] || 0) + n
+  }
+  for (const [k, baseAmt] of Object.entries(qtyBaseInicial || {})) {
+    const id = +k
+    const base = Math.max(0, +baseAmt || 0)
+    const real = qtyReal?.[id] !== undefined ? Math.max(0, +qtyReal[id] || 0) : base
+    const adj = real - base
+    if (adj !== 0) delta[id] = (delta[id] || 0) + adj
+  }
+  return delta
+}
+
+function aplicarDeltaStockLocal(stockList, deltaMap) {
+  return (stockList || []).map(p => {
+    const d = deltaMap?.[p.id]
+    if (!d || d === 0) return p
+    return { ...p, stock: Math.max(0, (+p.stock || 0) - d) }
+  })
+}
+
+async function persistirDeltaStockEnSupabase({ clinic, stockList, deltaMap }) {
+  if (!import.meta.env.VITE_SUPABASE_URL) return { ok: true }
+  const updates = (stockList || [])
+    .map(p => {
+      const d = deltaMap?.[p.id]
+      if (!d || d === 0) return null
+      return {
+        clinic_id: clinic,
+        articulo_id: p.id,
+        cantidad: Math.max(0, (+p.stock || 0) - d),
+      }
+    })
+    .filter(Boolean)
+  if (!updates.length) return { ok: true }
+  const { error } = await supabase
+    .from("articulos_por_clinica")
+    .upsert(updates, { onConflict: "clinic_id,articulo_id" })
+  if (error) return { ok: false, error: error.message }
+  return { ok: true }
 }
 
 /** Mapea respuesta de /api/erp/... (cliente en camelCase) al modelo local de pacientes. */
@@ -932,7 +1382,19 @@ function makeData() {
       plantilla:"Hola {nombre}, te recordamos tu turno el {fecha} a las {hora} en Estética ERP. Respondé este mensaje si necesitás cambiarlo.",
       horasAntes:24,
       activo:true,
+      /** Nombre exacto de la plantilla aprobada en Meta (envío fuera de ventana 24h). */
+      plantillaMetaNombre: "",
+      plantillaMetaIdioma: "es",
     },
+    /** Referencia de Instagram Graph API (secretos solo en .env del servidor). */
+    instagramConfig: {
+      graphApiVersion: "v21.0",
+      appId: "",
+      instagramBusinessId: "",
+      pageId: "",
+    },
+    /** Campañas, WhatsApp (Baileys), Instagram, asistente (endpoints de agente vía /api en servidor si los configurás). */
+    marketingCentro: { campanas: [], ig: { cuenta: "", conversaciones: [] }, wa: { numero: "", conversaciones: [] } },
     marketingAutomatizacion: {
       plantillaCumple:"¡Feliz cumple {nombre}! En Estética ERP tenés 10% extra en tratamientos este mes 🎂",
       cumpleActivo:true,
@@ -941,8 +1403,10 @@ function makeData() {
       reactivacionActivo:true,
     },
     bonosPacks: [],
+    bonosPagos: [],
+    bonosSesiones: [],
     suscripciones: [],
-    tpv: { movimientos: [], cierres: [] },
+    tpv: { movimientos: [], cierres: [], sesiones: [] },
     /** Firmas en BD (Supabase); ver también consentimientos JSON legacy en paciente */
     consentimientosFirmados: [],
     reservasOnlineConfig: { slug:"clinica", slotMinutos:30, anticipacionDias:60 },
@@ -1105,10 +1569,12 @@ function useMediaQuery(query) {
   return matches
 }
 
-function Modal({ open, onClose, title, children, footer }) {
+function Modal({ open, onClose, title, children, footer, wide = false }) {
   const fullScreen = useMediaQuery("(max-width: 640px)")
   const tablet = useMediaQuery("(min-width: 641px) and (max-width: 1100px)")
   if (!open) return null
+  const panelWidth = wide ? "min(860px, calc(100vw - 48px))" : "min(560px, calc(100vw - 48px))"
+  const panelMaxW = wide ? "min(95vw, 860px)" : "min(95vw, 560px)"
   return (
     <div
       className="erp-modal-backdrop"
@@ -1123,8 +1589,8 @@ function Modal({ open, onClose, title, children, footer }) {
         style={{
           borderRadius: fullScreen ? 0 : tablet ? 20 : 22,
           padding: fullScreen ? 16 : tablet ? 24 : 28,
-          width: fullScreen ? "100%" : "min(560px, calc(100vw - 48px))",
-          maxWidth: fullScreen ? "100%" : "min(95vw, 560px)",
+          width: fullScreen ? "100%" : panelWidth,
+          maxWidth: fullScreen ? "100%" : panelMaxW,
           maxHeight: fullScreen ? "100dvh" : tablet ? "min(92dvh, 900px)" : "90vh",
           minHeight: fullScreen ? "100dvh" : undefined,
           overflowY: fullScreen ? "hidden" : "auto",
@@ -1293,10 +1759,22 @@ function THead({ cols }) {
 }
 
 // ─── SECTION: DASHBOARD ───────────────────────────────────────
-function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
+function Dashboard({ data, clinic, setData, role, onOpenTurnoSession, onPersist, onGoAgenda, clinicNombre }) {
   const isEspecialista = normalizeRol(role) === "especialista"
   const cd = data.clinics[clinic]
   const todayT  = cd.turnos.filter(t => t.fecha === TODAY)
+  const todaySorted = useMemo(
+    () => [...todayT].sort((a, b) => String(a.hora || "").localeCompare(String(b.hora || ""))),
+    [todayT],
+  )
+  const profsDash = useMemo(() => {
+    const fromEmpleados = (data.empleados || [])
+      .filter(e => esEmpleadoAtiendeAgenda(e))
+      .map(e => ({ id: +e.id, nombre: e.nombre || "Profesional" }))
+    if (fromEmpleados.length) return fromEmpleados
+    return (data.profesionales || []).map(p => ({ id: +p.id, nombre: p.nombre || "Profesional" }))
+  }, [data.empleados, data.profesionales])
+  const profNombreDash = id => profsDash.find(p => p.id === (+id || 1))?.nombre || "—"
   const enCurso = todayT.filter(t => t.estado === "en_curso")
   const listosCobrarTurnos = todayT.filter(t => t.estado === "listo_cobrar")
   const pendCobro = (data.alertasCobro || []).filter(a => a.clinicId === clinic && a.estado === "pendiente")
@@ -1306,6 +1784,13 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
   const ingresos = cd.movimientos.filter(m => m.tipo==="ingreso").reduce((a,m) => a+m.monto, 0)
   const egresos  = cd.movimientos.filter(m => m.tipo==="egreso").reduce((a,m) => a+m.monto, 0)
   const lowStock = cd.stock.filter(p => p.stock <= p.minimo).length
+  const bonosPorVencer = (data.bonosPacks || []).filter(b => {
+    if (+b.clinicId !== +clinic) return false
+    if (!bonoEstaActivo(b)) return false
+    if (!b.vence) return false
+    const dias = Math.ceil((new Date(b.vence) - new Date(TODAY)) / 86400000)
+    return dias >= 0 && dias <= 15
+  })
   const canOpenDoctorSession = normalizeRol(role) === "especialista" || role === "gerente"
   const finSemanaTurnos = (() => {
     const d = new Date(`${TODAY}T12:00:00`)
@@ -1364,110 +1849,16 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
     setCobroMetodo("efectivo")
   }
 
-  const registrarIngresoCobroRespaldo = async ({ turnoId, turno, montoTotal, metodo }) => {
-    if (!turnoId || !(montoTotal > 0)) return
-    const fecha = turno?.fecha || TODAY
-    const cliente = turno?.cliente || "Paciente"
-    const concepto = `Cobro turno #${turnoId} — ${cliente}`
-    const comprobante = `AUTO-TURNO-${turnoId}`
-
-    if (import.meta.env.VITE_SUPABASE_URL) {
-      try {
-        const { data: tpvExists } = await supabase
-          .from("tpv_movimientos")
-          .select("id")
-          .eq("comprobante", comprobante)
-          .limit(1)
-        if (!tpvExists?.length) {
-          await supabase.from("tpv_movimientos").insert({
-            fecha,
-            clinic_id: clinic,
-            metodo: metodo || "efectivo",
-            monto: montoTotal,
-            concepto,
-            comprobante,
-          })
-        }
-      } catch {}
-      try {
-        const { data: clinicExists } = await supabase
-          .from("clinic_movimientos")
-          .select("id")
-          .eq("clinic_id", clinic)
-          .ilike("concepto", `%turno #${turnoId}%`)
-          .limit(1)
-        if (!clinicExists?.length) {
-          await supabase.from("clinic_movimientos").insert({
-            clinic_id: clinic,
-            tipo: "ingreso",
-            fecha,
-            concepto,
-            cat: "servicios",
-            monto: montoTotal,
-          })
-        }
-      } catch {}
-    }
-
-    setData(d => {
-      const tpvMovs = d.tpv?.movimientos || []
-      const clinicMovs = d.clinics[clinic]?.movimientos || []
-      const hasTpv = tpvMovs.some(m => m.comprobante === comprobante)
-      const hasClinic = clinicMovs.some(m => String(m.concepto || "").toLowerCase().includes(`turno #${turnoId}`))
-      const nextTpvId = tpvMovs.length ? Math.max(...tpvMovs.map(m => m.id || 0)) + 1 : 1
-      const nextClinicId = clinicMovs.length ? Math.max(...clinicMovs.map(m => m.id || 0)) + 1 : 1
-      return {
-        ...d,
-        tpv: {
-          ...d.tpv,
-          movimientos: hasTpv
-            ? tpvMovs
-            : [...tpvMovs, { id: nextTpvId, fecha, clinicId: clinic, metodo: metodo || "efectivo", monto: montoTotal, concepto, comprobante }],
-        },
-        clinics: {
-          ...d.clinics,
-          [clinic]: {
-            ...d.clinics[clinic],
-            movimientos: hasClinic
-              ? clinicMovs
-              : [...clinicMovs, { id: nextClinicId, tipo: "ingreso", fecha, concepto, cat: "servicios", monto: montoTotal }],
-          },
-        },
-      }
-    })
-  }
-
   const cobrarDirecto = async () => {
     if (!cobroModal) return
-    const { turnoId, alertCobro, turno, montoTotal } = cobroModal
+    const { turnoId, alertCobro, turno, montoTotal, montoServicio, montoInsumos } = cobroModal
     setCobrandoId(turnoId)
     try {
-      if (import.meta.env.VITE_SUPABASE_URL) {
-        let { error: eTurno } = await supabase.from("turnos").update({ estado: "finalizado", metodo_pago: cobroMetodo }).eq("id", turnoId)
-        if (eTurno?.message?.includes("metodo_pago")) {
-          ({ error: eTurno } = await supabase.from("turnos").update({ estado: "finalizado" }).eq("id", turnoId))
-        }
-        if (eTurno) {
-          alert(eTurno.message || "No se pudo cerrar el cobro.")
-          return
-        }
-        if (alertCobro?.id && typeof alertCobro.id === "number") {
-          await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: cobroMetodo }).eq("id", alertCobro.id)
-        }
-      }
-      await registrarIngresoCobroRespaldo({ turnoId, turno, montoTotal, metodo: cobroMetodo })
-      setData(d => ({
-        ...d,
-        alertasCobro: (d.alertasCobro || []).map(a => a.turnoId === turnoId && a.estado === "pendiente" ? { ...a, estado: "cobrado", metodoPago: cobroMetodo } : a),
-        clinics: {
-          ...d.clinics,
-          [clinic]: {
-            ...d.clinics[clinic],
-            turnos: (d.clinics[clinic]?.turnos || []).map(x => x.id === turnoId ? { ...x, estado: "finalizado" } : x),
-          },
-        },
-      }))
-      setCobroModal(null)
+      const res = await ejecutarCobroTurno({
+        data, setData, clinic, turnoId, alertCobro, turno,
+        montoTotal, montoServicio, montoInsumos, metodo: cobroMetodo, onPersist,
+      })
+      if (res.ok) setCobroModal(null)
     } finally {
       setCobrandoId(null)
     }
@@ -1548,6 +1939,78 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
         </div>
       )}
 
+      {/* Agenda del día — vista principal */}
+      <div style={{
+        background: C.card,
+        borderRadius: 16,
+        padding: 22,
+        boxShadow: "0 1px 3px rgba(0,0,0,.06)",
+        marginBottom: 22,
+        border: `1px solid ${C.violet}22`,
+      }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <Calendar size={20} color={C.violet}/>
+              <p style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>Agenda de hoy</p>
+              <Badge type="gray">{todaySorted.length}</Badge>
+            </div>
+            <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>{fmtDate(TODAY)} · {clinicNombre || `Clínica ${clinic}`}</p>
+          </div>
+          {onGoAgenda && (
+            <Btn onClick={onGoAgenda} style={{ minHeight: 44 }}>
+              <Calendar size={14}/> Abrir agenda completa
+            </Btn>
+          )}
+        </div>
+        {todaySorted.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "32px 16px", color: "#94A3B8", fontSize: 14, background: C.subtle, borderRadius: 12 }}>
+            No hay turnos agendados para hoy.
+            {onGoAgenda && (
+              <div style={{ marginTop: 12 }}>
+                <Btn variant="outline" sm onClick={onGoAgenda}><Plus size={12}/> Agendar cita</Btn>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {todaySorted.map(t => (
+              <div
+                key={t.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "72px 1fr auto",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: `1px solid ${C.border}`,
+                  background: t.estado === "en_curso" ? C.violetLight : t.estado === "listo_cobrar" ? "#FFFBEB" : "#fff",
+                }}
+              >
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: C.violet, lineHeight: 1.1 }}>{t.hora || "—"}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>hrs</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+                    {canOpenDoctorSession && !["listo_cobrar", "finalizado", "cancelado"].includes(t.estado) ? (
+                      <button type="button" onClick={() => onOpenTurnoSession?.(t)} style={{ border: "none", background: "none", padding: 0, fontWeight: 700, color: C.violet, cursor: "pointer", textAlign: "left" }}>
+                        {t.cliente}
+                      </button>
+                    ) : t.cliente}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.4 }}>
+                    {t.servicio} · {profNombreDash(t.profesionalId)}
+                  </div>
+                </div>
+                <Badge type={t.estado}>{estadoLabel[t.estado] || t.estado}</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* KPI row */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:14, marginBottom:22 }}>
         <KpiCard title="Turnos Hoy"      value={todayT.length}       sub={`Pendientes: ${todayT.filter(t=>t.estado==="pendiente").length}`} icon={Calendar}      accent={C.violet}  />
@@ -1565,6 +2028,46 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
           </>
         )}
       </div>
+
+      {/* Bonos por vencer */}
+      {bonosPorVencer.length > 0 && (
+        <div style={{ background:"#FEF3C7", border:"1.5px solid #F59E0B", borderRadius:14, padding:"14px 18px", marginBottom:18 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <Bell size={16} color="#B45309" />
+            <strong style={{ fontSize:13, color:"#92400E" }}>Bonos próximos a vencer ({bonosPorVencer.length})</strong>
+          </div>
+          {bonosPorVencer.map(b => {
+            const dias = Math.ceil((new Date(b.vence) - new Date(TODAY)) / 86400000)
+            const pac = data.pacientes.find(p => p.id === b.pacienteId)
+            const rest = bonoSesionesRestantes(b)
+            const debe = bonoSaldoDebe(b)
+            return (
+              <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #FDE68A", flexWrap:"wrap", gap:4 }}>
+                <div style={{ fontSize:13 }}>
+                  <strong>{pac?.nombre || `Paciente #${b.pacienteId}`}</strong>
+                  <span style={{ color:"#78350F", marginLeft:8 }}>{b.nombre}</span>
+                </div>
+                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                  <span style={{ fontSize:12, color:"#78350F" }}>{rest} sesión{rest !== 1 ? "es" : ""} · debe {fmt(debe)}</span>
+                  <span style={{
+                    fontSize:11, fontWeight:700, borderRadius:20, padding:"2px 10px",
+                    background: dias <= 3 ? "#FEE2E2" : "#FEF9C3",
+                    color: dias <= 3 ? "#991B1B" : "#78350F",
+                    border: `1px solid ${dias <= 3 ? "#FCA5A5" : "#FDE68A"}`,
+                  }}>Vence en {dias} día{dias !== 1 ? "s" : ""}</span>
+                  {pac?.tel && (
+                    <a href={waUrl(pac.tel, `Hola ${pac.nombre}, tu bono «${b.nombre}» vence en ${dias} día${dias !== 1 ? "s" : ""} y te quedan ${rest} sesión${rest !== 1 ? "es" : ""}. ¿Quieres agendar?`)}
+                      target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize:11, color:"#059669", textDecoration:"none", fontWeight:700, background:"#D1FAE5", borderRadius:20, padding:"2px 10px", border:"1px solid #6EE7B7" }}>
+                      Avisar WA
+                    </a>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* Charts row */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap:18, marginBottom:22 }}>
@@ -1630,49 +2133,6 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
         </div>
       </div>
 
-      {/* Today appointments */}
-      <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
-          <div>
-            <p style={{ fontSize:14, fontWeight:700, marginBottom:2 }}>Turnos de Hoy</p>
-            <p style={{ fontSize:12, color:C.muted }}>{fmtDate(TODAY)} · Clínica {clinic}</p>
-          </div>
-        </div>
-        {todayT.length === 0
-          ? <div style={{ textAlign:"center", padding:"28px 0", color:"#94A3B8", fontSize:13 }}>Sin turnos para hoy</div>
-          : (
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                <THead cols={["Hora","Cliente","Servicio","Categoría","Estado"]}/>
-                <tbody>
-                  {todayT.map(t => (
-                    <tr key={t.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
-                      <td style={{ padding:"11px 14px", fontWeight:700 }}>{t.hora}</td>
-                      <td style={{ padding:"11px 14px", fontWeight:600, fontSize:13 }}>
-                        {canOpenDoctorSession && !["listo_cobrar", "finalizado", "cancelado"].includes(t.estado)
-                          ? (
-                            <button
-                              type="button"
-                              onClick={() => onOpenTurnoSession?.(t)}
-                              style={{ border:"none", background:"none", padding:0, margin:0, fontWeight:700, color:C.violet, cursor:"pointer", textAlign:"left" }}
-                              title="Abrir sesión médica"
-                            >
-                              {t.cliente}
-                            </button>
-                            )
-                          : t.cliente}
-                      </td>
-                      <td style={{ padding:"11px 14px", fontSize:13, color:C.muted }}>{t.servicio}</td>
-                      <td style={{ padding:"11px 14px" }}><Badge type={t.cat}>{catLabel[t.cat] || t.cat}</Badge></td>
-                      <td style={{ padding:"11px 14px" }}><Badge type={t.estado}>{estadoLabel[t.estado]}</Badge></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-      </div>
-
       <Modal open={!!cobroModal} onClose={() => setCobroModal(null)} title="Cobrar — Método de pago"
         footer={<>
           <Btn variant="outline" onClick={() => setCobroModal(null)}>Cancelar</Btn>
@@ -1704,9 +2164,14 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession }) {
 }
 
 // ─── SECTION: AGENDA ─────────────────────────────────────────
-function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicOptionsProp = [] }) {
+function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicOptionsProp = [], fullscreen = false, onReloadBonos }) {
   const compact = useMediaQuery("(max-width: 980px)")
-  const [view, setView] = useState("lista")
+  const [calView, setCalView] = useState("semana")
+  const [weekOffset, setWeekOffset] = useState(0)
+  const [monthOffset, setMonthOffset] = useState(0)
+  const [selectedDay, setSelectedDay] = useState(TODAY)
+  const [detailTurno, setDetailTurno] = useState(null)
+  const [showDisp, setShowDisp] = useState(false)
   const [profFilter, setProfFilter] = useState("all")
   const [open, setOpen] = useState(false)
   const [savingTurno, setSavingTurno] = useState(false)
@@ -1718,6 +2183,12 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   const [dispRows, setDispRows] = useState([])
   const [savingDisp, setSavingDisp] = useState(false)
   const [dispForm, setDispForm] = useState({ empleadoId: "", diaSemana: 1, horaDesde: "09:00", horaHasta: "18:00", nota: "" })
+  const [bonoAgendaBusy, setBonoAgendaBusy] = useState(false)
+  const [bonoAgendaSel, setBonoAgendaSel] = useState("")
+  const [bonoAgendaCobro, setBonoAgendaCobro] = useState("")
+  const [bonoAgendaMetodo, setBonoAgendaMetodo] = useState("efectivo")
+  const puedeCheckinBono = puedeCheckinBonoCaja(role)
+  const esEspecialistaAgenda = normalizeRol(role) === "especialista"
   const profs = useMemo(() => {
     const fromEmpleados = (data.empleados || [])
       .filter(e => esEmpleadoAtiendeAgenda(e))
@@ -1752,10 +2223,97 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   const turnos = profFilter === "all" ? turnosRaw : turnosRaw.filter(t => (t.profesionalId || 1) === +profFilter)
   const profNombre = id => profs.find(p => p.id === id)?.nombre || "—"
   const canSaveTurno = Boolean(String(form.cliente || "").trim() && String(form.hora || "").trim() && String(form.servicio || "").trim())
+  const targetClinicAgenda = allowCrossClinicAgenda ? (+form.clinicId || clinic) : clinic
+  const pacienteIdForm = useMemo(() => {
+    if (form.clienteSelId) return +form.clienteSelId
+    return findPacienteIdByNombre(data, form.cliente, targetClinicAgenda)
+  }, [form.clienteSelId, form.cliente, data, targetClinicAgenda])
+  const pacienteFormHit = useMemo(
+    () => (pacienteIdForm ? (data.pacientes || []).find(p => +p.id === +pacienteIdForm) : null),
+    [data.pacientes, pacienteIdForm],
+  )
+  const bonosPacienteForm = useMemo(
+    () => bonosActivosPaciente(data.bonosPacks, pacienteIdForm, targetClinicAgenda),
+    [data.bonosPacks, pacienteIdForm, targetClinicAgenda],
+  )
+  const detailPacienteId = detailTurno
+    ? (detailTurno.pacienteId ?? findPacienteIdByNombre(data, detailTurno.cliente, clinic))
+    : null
+  const bonosPacienteDetail = useMemo(
+    () => bonosActivosPaciente(data.bonosPacks, detailPacienteId, clinic),
+    [data.bonosPacks, detailPacienteId, clinic],
+  )
+  const bonosPorPacienteId = useMemo(() => {
+    const map = new Map()
+    for (const b of data.bonosPacks || []) {
+      if (!bonoEstaActivo(b) || +b.clinicId !== +clinic) continue
+      const pid = +b.pacienteId
+      if (!pid) continue
+      if (!map.has(pid)) map.set(pid, [])
+      map.get(pid).push(b)
+    }
+    return map
+  }, [data.bonosPacks, clinic])
+
+  const detailPacienteHit = useMemo(
+    () => (detailPacienteId ? (data.pacientes || []).find(p => +p.id === +detailPacienteId) : null),
+    [data.pacientes, detailPacienteId],
+  )
+  const sesionMarcadaTurno = useMemo(
+    () => (detailTurno ? (data.bonosSesiones || []).find(s => s.turnoId === detailTurno.id) : null),
+    [detailTurno, data.bonosSesiones],
+  )
+  const bonoSeleccionadoAgenda = useMemo(
+    () => (data.bonosPacks || []).find(b => String(b.id) === String(bonoAgendaSel)),
+    [data.bonosPacks, bonoAgendaSel],
+  )
+
+  const checkinBonoRecepcion = async () => {
+    if (!puedeCheckinBono) return
+    const bono = bonoSeleccionadoAgenda
+    if (!bono || !detailTurno) return
+    if (sesionMarcadaTurno) {
+      alert("Esta cita ya tiene sesión de bono registrada en recepción.")
+      return
+    }
+    setBonoAgendaBusy(true)
+    try {
+      const cobroNum = bonoAgendaCobro === "" ? 0 : Math.max(0, +bonoAgendaCobro || 0)
+      const n = await usarSesionBono({
+        bono,
+        clinicId: clinic,
+        turnoId: detailTurno.id,
+        cobroMonto: cobroNum,
+        metodoPago: bonoAgendaMetodo,
+        notas: `Check-in recepción · ${fmtDate(detailTurno.fecha)} ${detailTurno.hora || ""}`,
+      })
+      await syncBonosToState(setData)
+      onReloadBonos?.()
+      setBonoAgendaCobro("")
+      if (["pendiente", "confirmado"].includes(detailTurno.estado)) {
+        await setTurnoEstado(detailTurno.id, "en_sala")
+        setDetailTurno(t => t ? { ...t, estado: "en_sala" } : t)
+      }
+      const debeTras = Math.max(0, (+bono.precio || 0) - (+bono.montoPagado || 0) - cobroNum)
+      alert(`Sesión ${n} marcada en recepción. Debe ${fmt(debeTras)}. Enviá al especialista en área médica.`)
+    } catch (e) {
+      alert(e?.message || "No se pudo completar el check-in del bono.")
+    } finally {
+      setBonoAgendaBusy(false)
+    }
+  }
 
   useEffect(() => {
     setForm(f => ({ ...f, clinicId: clinic }))
   }, [clinic])
+
+  useEffect(() => {
+    if (!detailTurno) return
+    const pid = detailTurno.pacienteId ?? findPacienteIdByNombre(data, detailTurno.cliente, clinic)
+    const activos = bonosActivosPaciente(data.bonosPacks, pid, clinic)
+    setBonoAgendaSel(activos[0]?.id ? String(activos[0].id) : "")
+    setBonoAgendaCobro("")
+  }, [detailTurno, data.bonosPacks, clinic, data])
 
   useEffect(() => {
     if (!import.meta.env.VITE_SUPABASE_URL) return
@@ -1947,9 +2505,19 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     setOpen(false)
     setForm({ clinicId: targetClinic, clienteSelId:"", cliente:"", tel:"", dni:"", fecha:TODAY, hora:"", cat:"valoracion", servicio:"", salaTrabajo:"", obs:"", profesionalId:"" })
   }
-  const del = id => setData(d => ({ ...d, clinics: { ...d.clinics, [clinic]: {
-    ...d.clinics[clinic], turnos: d.clinics[clinic].turnos.filter(t=>t.id!==id)
-  }}}))
+  const del = async id => {
+    if (!window.confirm("¿Eliminar este turno definitivamente?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("turnos").delete().eq("id", id)
+      if (error) {
+        alert(error.message || "No se pudo borrar el turno.")
+        return
+      }
+    }
+    setData(d => ({ ...d, clinics: { ...d.clinics, [clinic]: {
+      ...d.clinics[clinic], turnos: d.clinics[clinic].turnos.filter(t=>t.id!==id)
+    }}}))
+  }
   const patchTurno = (id, patch) => setData(d => ({ ...d, clinics: { ...d.clinics, [clinic]: {
     ...d.clinics[clinic], turnos: d.clinics[clinic].turnos.map(t => t.id===id ? { ...t, ...patch } : t)
   }}}))
@@ -1964,32 +2532,125 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     }
     patchTurno(turnoId, { estado: nextEstado })
   }
-  const weekTurnos = profFilter === "all" ? data.clinics[clinic].turnos : data.clinics[clinic].turnos.filter(t => (t.profesionalId||1)===+profFilter)
+  // ── Calendario: constantes de tiempo ──
+  const HOUR_START = 8
+  const HOUR_END = 22
+  const PX_PER_HOUR = 80
+  const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i)
 
-  /* Calendar */
-  const weekStart = (() => {
-    const d = new Date(); const dow = d.getDay()
-    d.setDate(d.getDate() - (dow===0?6:dow-1)); return d
-  })()
-  const week = Array.from({length:7},(_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d})
-  const dayL = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]
-  const catColor = { valoracion:"#FFFBEB", facial:"#EFF6FF", corporal:"#F0FDFA", laser:"#EEF2FF", botox:"#FDF4FF", clinico:"#ECFDF5" }
-  const catText  = { valoracion:"#B45309", facial:"#1D4ED8", corporal:"#0F766E", laser:"#3730A3", botox:"#6B21A8", clinico:"#065F46" }
+  const timeToY = (timeStr) => {
+    if (!timeStr) return 0
+    const [h, m] = String(timeStr).split(":").map(Number)
+    return ((h - HOUR_START) + m / 60) * PX_PER_HOUR
+  }
+
+  const getDuracion = (t) => {
+    const srv = (data.servicios || []).find(s => s.nombre === t.servicio)
+    return Math.max(15, srv?.duracion || 30)
+  }
+
+  const weekStartCalc = useMemo(() => {
+    const d = new Date()
+    const dow = d.getDay()
+    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1) + weekOffset * 7)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }, [weekOffset])
+
+  const monthDate = useMemo(() => {
+    const d = new Date()
+    d.setDate(1)
+    d.setMonth(d.getMonth() + monthOffset)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }, [monthOffset])
+
+  const monthGridDays = useMemo(() => {
+    const year = monthDate.getFullYear()
+    const month = monthDate.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const startOffset = (firstDay.getDay() + 6) % 7 // Monday-based
+    const start = new Date(firstDay)
+    start.setDate(1 - startOffset)
+    return Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start)
+      d.setDate(start.getDate() + i)
+      return d
+    })
+  }, [monthDate])
+
+  const viewDays = useMemo(() => {
+    if (calView === "dia") return [new Date(selectedDay + "T12:00:00")]
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStartCalc)
+      d.setDate(weekStartCalc.getDate() + i)
+      return d
+    })
+  }, [calView, selectedDay, weekStartCalc])
+
+  const MONTHS_LONG = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+  const weekLabel = useMemo(() => {
+    const MO = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]
+    if (calView === "mes") return `${MONTHS_LONG[monthDate.getMonth()]} ${monthDate.getFullYear()}`
+    const first = viewDays[0]
+    const last = viewDays[viewDays.length - 1]
+    if (calView === "dia") return `${first.getDate()} ${MO[first.getMonth()]} ${first.getFullYear()}`
+    const sm = first.getMonth() === last.getMonth()
+    if (sm) return `${first.getDate()}–${last.getDate()} ${MO[first.getMonth()]} ${first.getFullYear()}`
+    return `${first.getDate()} ${MO[first.getMonth()]} – ${last.getDate()} ${MO[last.getMonth()]} ${last.getFullYear()}`
+  }, [viewDays, calView, monthDate])
+
+  const catColor  = { valoracion:"#FFFBEB", facial:"#EFF6FF", corporal:"#F0FDFA", laser:"#EEF2FF", botox:"#FDF4FF", clinico:"#ECFDF5" }
+  const catBorder = { valoracion:"#F59E0B", facial:"#3B82F6", corporal:"#14B8A6", laser:"#6366F1", botox:"#A855F7", clinico:"#10B981" }
+  const catTxt    = { valoracion:"#92400E", facial:"#1E40AF", corporal:"#0F766E", laser:"#3730A3", botox:"#6B21A8", clinico:"#065F46" }
+
+  const computeColumns = (dayTurnos) => {
+    const sorted = [...dayTurnos].sort((a, b) => String(a.hora).localeCompare(String(b.hora)))
+    const cols = []
+    const assignment = {}
+    for (const t of sorted) {
+      const startY = timeToY(t.hora)
+      const endY = startY + getDuracion(t) * (PX_PER_HOUR / 60)
+      let placed = false
+      for (let ci = 0; ci < cols.length; ci++) {
+        const last = cols[ci][cols[ci].length - 1]
+        const lastEnd = timeToY(last.hora) + getDuracion(last) * (PX_PER_HOUR / 60)
+        if (startY >= lastEnd) { cols[ci].push(t); assignment[t.id] = ci; placed = true; break }
+      }
+      if (!placed) { cols.push([t]); assignment[t.id] = cols.length - 1 }
+    }
+    return { numCols: Math.max(1, cols.length), assignment }
+  }
+
+  const [nowY, setNowY] = useState(() => {
+    const n = new Date()
+    return ((n.getHours() - HOUR_START) + n.getMinutes() / 60) * PX_PER_HOUR
+  })
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const n = new Date()
+      setNowY(((n.getHours() - HOUR_START) + n.getMinutes() / 60) * PX_PER_HOUR)
+    }, 60000)
+    return () => clearInterval(iv)
+  }, [])
+
+  const openNewTurnoAt = (dateStr, hora) => {
+    setForm(f => ({ ...f, fecha: dateStr, hora: hora || "" }))
+    setOpen(true)
+  }
+
   const catSvcs = useMemo(() => {
     const list = (data.servicios || []).filter(s => s.cat === form.cat)
-    if (form.cat === "valoracion" && list.length === 0) {
+    if (form.cat === "valoracion" && list.length === 0)
       return [{ id: "__valoracion_placeholder__", nombre: "Valoración (primera consulta)", cat: "valoracion", precio: 0, duracion: 45, sesiones: 1 }]
-    }
     return list
   }, [data.servicios, form.cat])
   const noServiciosEnCategoria = catSvcs.length === 0
   const sedesParaSelect = useMemo(() => {
-    if ((clinicOptionsProp || []).length)
-      return clinicOptionsProp
+    if ((clinicOptionsProp || []).length) return clinicOptionsProp
     return Object.keys(data.clinics || {}).map(cid => ({ id: +cid, nombre: `Clínica ${cid}` }))
   }, [clinicOptionsProp, data.clinics])
-  const nombreClinica = id =>
-    clinicOptionsProp.find(c => +c.id === +id)?.nombre || `Clínica ${id}`
+  const nombreClinica = id => clinicOptionsProp.find(c => +c.id === +id)?.nombre || `Clínica ${id}`
   const puedeQrAreaMedica = t => t && !["listo_cobrar", "finalizado"].includes(t.estado)
 
   const saveQrBase = () => {
@@ -2002,10 +2663,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   }
 
   useEffect(() => {
-    if (!qrOpen || !qrTurno) {
-      setQrDataUrl("")
-      return
-    }
+    if (!qrOpen || !qrTurno) { setQrDataUrl(""); return }
     const link = buildDoctorSessionUrl({ clinicId: clinic, turnoId: qrTurno.id })
     let cancelled = false
     const size = typeof window !== "undefined" && window.innerWidth < 480 ? 220 : 260
@@ -2015,133 +2673,105 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     return () => { cancelled = true }
   }, [qrOpen, qrTurno, clinic, qrBaseTick])
 
+  const DAY_SH = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]
+
   return (
-    <div>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:22, flexWrap:"wrap", gap:12 }}>
-        <div>
-          <h2 style={{ fontSize:20, fontWeight:700 }}>Agenda por profesional</h2>
-          <p style={{ fontSize:13, color:C.muted, marginTop:2 }}>{nombreClinica(clinic)} · {turnos.length} turnos (filtrados)</p>
+    <div style={{ display:"flex", flexDirection:"column", minHeight:0, ...(fullscreen ? { height:"100%", overflow:"hidden" } : {}) }}>
+
+      {/* ── TOOLBAR ─────────────────────────────────────────── */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <button
+            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()-1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") setMonthOffset(m=>m-1) else setWeekOffset(w=>w-1) }}
+            style={{ border:`1px solid ${C.border}`, background:"#fff", borderRadius:8, width:32, height:32, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", color:C.text }}>‹</button>
+          <button
+            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()+1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") setMonthOffset(m=>m+1) else setWeekOffset(w=>w+1) }}
+            style={{ border:`1px solid ${C.border}`, background:"#fff", borderRadius:8, width:32, height:32, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", color:C.text }}>›</button>
+          <button
+            onClick={() => { setWeekOffset(0); setMonthOffset(0); setSelectedDay(TODAY) }}
+            style={{ border:`1px solid ${C.border}`, background:"#fff", borderRadius:8, padding:"0 14px", height:32, cursor:"pointer", fontSize:12, fontWeight:700, color:C.text }}>Hoy</button>
+          <span style={{ fontSize:15, fontWeight:700, color:C.text, textTransform:"capitalize" }}>{weekLabel}</span>
         </div>
-        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", width: compact ? "100%" : "auto" }}>
-          <select style={{ ...inp, width: compact ? "100%" : 220, maxWidth:"100%", flex: compact ? "1 1 100%" : undefined }} value={profFilter} onChange={e => setProfFilter(e.target.value)}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
+            {[{id:"mes",label:"Mes"},{id:"semana",label:"Semana"},{id:"dia",label:"Día"},{id:"lista",label:"Lista"}].map(v => (
+              <button key={v.id} onClick={() => setCalView(v.id)}
+                style={{ padding:"0 12px", height:32, fontSize:12, fontWeight:700, border:"none", cursor:"pointer", transition:"all .15s", background:calView===v.id?C.violet:"#fff", color:calView===v.id?"#fff":C.muted }}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+          <select style={{ ...inp, width:compact?"100%":180, height:32, padding:"0 10px", fontSize:12 }} value={profFilter} onChange={e=>setProfFilter(e.target.value)}>
             <option value="all">Todos los profesionales</option>
-            {profsForClinic.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <Btn onClick={() => setOpen(true)} style={{ width: compact ? "100%" : "auto", justifyContent:"center" }}><Plus size={14}/> Nuevo Turno</Btn>
+          <Btn onClick={()=>setOpen(true)} style={{ height:32, padding:"0 14px", justifyContent:"center" }}><Plus size={14}/> Nuevo</Btn>
+          <Btn variant="outline" sm onClick={()=>setShowDisp(d=>!d)} title="Disponibilidad del personal"><Settings size={13}/></Btn>
         </div>
       </div>
 
-      <div style={{ marginBottom:18, padding:14, background:C.subtle, borderRadius:12, border:`1px solid ${C.border}` }}>
-        <div style={{ fontSize:12, fontWeight:700, marginBottom:6, display:"flex", alignItems:"center", gap:6 }}><QrCode size={16} color={C.violet}/> URL para escanear con el teléfono</div>
-        <p style={{ fontSize:12, color:C.muted, marginBottom:10, lineHeight:1.45 }}>
-          El QR debe coincidir con la IP que muestra Vite en <strong>Network</strong> (y con HTTPS si usás <code style={codeStyle(C.card)}>VITE_DEV_HTTPS=true</code>). Podés fijar la base en <code style={codeStyle(C.card)}>VITE_PUBLIC_APP_URL</code> o editá abajo y <strong>Guardar</strong> (tiene prioridad). Si abrís la app en el PC por la IP de la red, el QR usa esa misma URL aunque el <code style={codeStyle(C.card)}>.env</code> tenga otra IP antigua.
-        </p>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"stretch", flexDirection: compact ? "column" : "row" }}>
-          <input
-            style={{ ...inp, flex:1, minWidth:0, width: compact ? "100%" : undefined }}
-            value={qrBaseDraft}
-            onChange={e => setQrBaseDraft(e.target.value)}
-            placeholder={typeof window !== "undefined" ? window.location.origin : "http://…"}
-          />
-          <Btn type="button" onClick={saveQrBase} style={{ width: compact ? "100%" : "auto", justifyContent:"center" }}>Guardar</Btn>
-        </div>
-      </div>
-
-      <div style={{ marginBottom:18, padding:14, background:C.card, borderRadius:12, border:`1px solid ${C.border}` }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:10 }}>
-          <div style={{ fontSize:14, fontWeight:700 }}>Disponibilidad del personal (clínica actual)</div>
-          <div style={{ fontSize:12, color:C.muted }}>{DIA_SEMANA.length} días · {dispRows.length} franja(s)</div>
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "repeat(6, minmax(0,1fr))", gap:8, marginBottom:10 }}>
-          <select style={inp} value={dispForm.empleadoId} onChange={e => setDispForm(f => ({ ...f, empleadoId: e.target.value }))} disabled={!canEditDisponibilidad}>
-            <option value="">Profesional…</option>
-            {profsForClinic.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-          </select>
-          <select style={inp} value={dispForm.diaSemana} onChange={e => setDispForm(f => ({ ...f, diaSemana: +e.target.value }))} disabled={!canEditDisponibilidad}>
-            {[1,2,3,4,5,6,0].map(d => <option key={d} value={d}>{DIA_SEMANA[d]}</option>)}
-          </select>
-          <input type="time" style={inp} value={dispForm.horaDesde} onChange={e => setDispForm(f => ({ ...f, horaDesde: e.target.value }))} disabled={!canEditDisponibilidad}/>
-          <input type="time" style={inp} value={dispForm.horaHasta} onChange={e => setDispForm(f => ({ ...f, horaHasta: e.target.value }))} disabled={!canEditDisponibilidad}/>
-          <input style={{ ...inp, gridColumn: compact ? "auto" : "span 2" }} placeholder="Nota (opcional)" value={dispForm.nota} onChange={e => setDispForm(f => ({ ...f, nota: e.target.value }))} disabled={!canEditDisponibilidad}/>
-        </div>
-        {canEditDisponibilidad && <Btn sm onClick={() => void saveDisponibilidad()} disabled={savingDisp}>{savingDisp ? "Guardando..." : "Agregar disponibilidad"}</Btn>}
-        <div style={{ marginTop:10, maxHeight:180, overflowY:"auto" }}>
-          {dispRows.length === 0 ? <div style={{ fontSize:12, color:C.muted }}>Sin disponibilidades cargadas.</div> : dispRows.map(r => (
-            <div key={r.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, borderBottom:`1px solid ${C.subtle}`, padding:"7px 0" }}>
-              <div style={{ fontSize:12 }}>
-                <strong>{profsForClinic.find(p => +p.id === +r.empleadoId)?.nombre || `Profesional ${r.empleadoId}`}</strong>{" "}
-                · {DIA_SEMANA[r.diaSemana] || r.diaSemana} · {r.horaDesde}–{r.horaHasta}
-                {r.nota ? ` · ${r.nota}` : ""}
-              </div>
-              {canEditDisponibilidad && <Btn variant="danger" sm onClick={() => void delDisponibilidad(r.id)}><Trash2 size={11}/></Btn>}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <TabBar tabs={[{id:"semana",label:"Semana"},{id:"lista",label:"Lista"}]} active={view} onChange={setView}/>
-
-      {view==="semana" && (
-        <div style={{ background:C.card, borderRadius:16, padding:18, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-          <div style={{ display:"grid", gridTemplateColumns: compact ? "repeat(2,minmax(0,1fr))" : "repeat(7,1fr)", gap:8 }}>
-            {week.map((d,i) => {
-              const ds = d.toISOString().split("T")[0]
-              const isToday = ds===TODAY
-              const dt = weekTurnos.filter(t => t.fecha===ds)
-              return (
-                <div key={i} style={{ borderRadius:10, overflow:"hidden", border:`1px solid ${isToday?C.violet+"40":C.border}` }}>
-                  <div style={{ textAlign:"center", padding:"7px 4px",
-                    background: isToday ? C.violetLight : C.subtle,
-                    color: isToday ? C.violet : C.muted,
-                    fontSize:11, fontWeight:700, textTransform:"uppercase" }}>
-                    {dayL[i]}<br/>
-                    <span style={{ fontSize:15, fontWeight:isToday?800:600 }}>{d.getDate()}</span>
+      {/* ── DISPONIBILIDAD (colapsable) ──────────────────────── */}
+      {showDisp && (
+        <div style={{ marginBottom:14, padding:14, background:C.card, borderRadius:12, border:`1px solid ${C.border}` }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+            <div style={{ fontSize:13, fontWeight:700 }}>Disponibilidad del personal — {nombreClinica(clinic)}</div>
+            <div style={{ fontSize:12, color:C.muted }}>{dispRows.length} franja(s)</div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:compact?"1fr":"repeat(6,minmax(0,1fr))", gap:8, marginBottom:10 }}>
+            <select style={inp} value={dispForm.empleadoId} onChange={e=>setDispForm(f=>({...f,empleadoId:e.target.value}))} disabled={!canEditDisponibilidad}>
+              <option value="">Profesional…</option>
+              {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+            <select style={inp} value={dispForm.diaSemana} onChange={e=>setDispForm(f=>({...f,diaSemana:+e.target.value}))} disabled={!canEditDisponibilidad}>
+              {[1,2,3,4,5,6,0].map(d=><option key={d} value={d}>{DIA_SEMANA[d]}</option>)}
+            </select>
+            <input type="time" style={inp} value={dispForm.horaDesde} onChange={e=>setDispForm(f=>({...f,horaDesde:e.target.value}))} disabled={!canEditDisponibilidad}/>
+            <input type="time" style={inp} value={dispForm.horaHasta} onChange={e=>setDispForm(f=>({...f,horaHasta:e.target.value}))} disabled={!canEditDisponibilidad}/>
+            <input style={{...inp,gridColumn:compact?"auto":"span 2"}} placeholder="Nota (opcional)" value={dispForm.nota} onChange={e=>setDispForm(f=>({...f,nota:e.target.value}))} disabled={!canEditDisponibilidad}/>
+          </div>
+          {canEditDisponibilidad && <Btn sm onClick={()=>void saveDisponibilidad()} disabled={savingDisp}>{savingDisp?"Guardando...":"Agregar franja"}</Btn>}
+          <div style={{ marginTop:10, maxHeight:160, overflowY:"auto" }}>
+            {dispRows.length===0
+              ? <div style={{ fontSize:12, color:C.muted }}>Sin disponibilidades cargadas.</div>
+              : dispRows.map(r=>(
+                <div key={r.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, borderBottom:`1px solid ${C.subtle}`, padding:"7px 0" }}>
+                  <div style={{ fontSize:12 }}>
+                    <strong>{profsForClinic.find(p=>+p.id===+r.empleadoId)?.nombre||`Prof. ${r.empleadoId}`}</strong>
+                    {" · "}{DIA_SEMANA[r.diaSemana]||r.diaSemana} · {r.horaDesde}–{r.horaHasta}{r.nota?` · ${r.nota}`:""}
                   </div>
-                  <div style={{ minHeight:72, padding:4 }}>
-                    {dt.slice(0,3).map(t => (
-                      <div key={t.id} style={{ background:catColor[t.cat] ?? catColor.clinico, color:catText[t.cat] ?? catText.clinico,
-                        fontSize:10, fontWeight:600, padding:"3px 5px", borderRadius:5, marginBottom:2,
-                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {t.hora} {t.cliente.split(" ")[0]}
-                      </div>
-                    ))}
-                    {dt.length>3&&<div style={{fontSize:9,color:C.muted,padding:"2px 4px"}}>+{dt.length-3} más</div>}
-                  </div>
+                  {canEditDisponibilidad && <Btn variant="danger" sm onClick={()=>void delDisponibilidad(r.id)}><Trash2 size={11}/></Btn>}
                 </div>
-              )
-            })}
+              ))}
           </div>
         </div>
       )}
 
-      {view==="lista" && (
+      {/* ── VISTA LISTA ─────────────────────────────────────── */}
+      {calView==="lista" && (
         <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+          <h3 style={{ fontSize:15, fontWeight:700, marginBottom:14 }}>Todos los turnos — {nombreClinica(clinic)}</h3>
           {turnos.length===0
-            ? <div style={{textAlign:"center",padding:"36px 0",color:"#94A3B8",fontSize:13}}>Sin turnos registrados</div>
-            : <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse"}}>
+            ? <div style={{ textAlign:"center", padding:"36px 0", color:"#94A3B8", fontSize:13 }}>Sin turnos registrados</div>
+            : <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
                   <THead cols={["Fecha","Hora","Profesional","Cliente","Teléfono","Servicio","Cat.","Estado",""]}/>
                   <tbody>
                     {[...turnos].sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.hora.localeCompare(b.hora)).map(t=>(
-                      <tr key={t.id} style={{borderBottom:`1px solid ${C.subtle}`}}>
-                        <td style={{padding:"11px 14px",fontSize:12,color:C.muted}}>{fmtDate(t.fecha)}</td>
-                        <td style={{padding:"11px 14px",fontWeight:700}}>{t.hora}</td>
-                        <td style={{padding:"11px 14px",fontSize:12,maxWidth:120}}>
-                          {t.estado === "listo_cobrar" ? "Recepción" : profNombre(t.profesionalId||1)}
-                        </td>
-                        <td style={{padding:"11px 14px",fontWeight:600,fontSize:13}}>{t.cliente}</td>
-                        <td style={{padding:"11px 14px",fontSize:12,color:C.muted}}>{t.tel||"—"}</td>
-                        <td style={{padding:"11px 14px",fontSize:13}}>{t.servicio}</td>
-                        <td style={{padding:"11px 14px"}}><Badge type={t.cat}>{catLabel[t.cat] || t.cat}</Badge></td>
-                        <td style={{padding:"11px 14px"}}><Badge type={t.estado}>{estadoLabel[t.estado]}</Badge></td>
-                        <td style={{padding:"11px 14px"}}>
-                          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                            {t.estado==="pendiente" && <Btn variant="outline" sm onClick={() => void setTurnoEstado(t.id, "confirmado")}>Confirmar</Btn>}
-                            {t.estado==="confirmado" && <Btn sm onClick={() => void setTurnoEstado(t.id, "en_sala")}>A sala</Btn>}
-                            {puedeQrAreaMedica(t) && (
-                              <Btn variant="outline" sm title="QR área médica" onClick={() => { setQrTurno(t); setQrOpen(true) }}><QrCode size={12}/></Btn>
-                            )}
-                            <Btn variant="danger"  sm onClick={()=>del(t.id)}><Trash2 size={11}/></Btn>
+                      <tr key={t.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
+                        <td style={{ padding:"11px 14px", fontSize:12, color:C.muted }}>{fmtDate(t.fecha)}</td>
+                        <td style={{ padding:"11px 14px", fontWeight:700 }}>{t.hora}</td>
+                        <td style={{ padding:"11px 14px", fontSize:12, maxWidth:120 }}>{t.estado==="listo_cobrar"?"Recepción":profNombre(t.profesionalId||1)}</td>
+                        <td style={{ padding:"11px 14px", fontWeight:600, fontSize:13 }}>{t.cliente}</td>
+                        <td style={{ padding:"11px 14px", fontSize:12, color:C.muted }}>{t.tel||"—"}</td>
+                        <td style={{ padding:"11px 14px", fontSize:13 }}>{t.servicio}</td>
+                        <td style={{ padding:"11px 14px" }}><Badge type={t.cat}>{catLabel[t.cat]||t.cat}</Badge></td>
+                        <td style={{ padding:"11px 14px" }}><Badge type={t.estado}>{estadoLabel[t.estado]}</Badge></td>
+                        <td style={{ padding:"11px 14px" }}>
+                          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                            {t.estado==="pendiente" && <Btn variant="outline" sm onClick={()=>void setTurnoEstado(t.id,"confirmado")}>Confirmar</Btn>}
+                            {t.estado==="confirmado" && <Btn sm onClick={()=>void setTurnoEstado(t.id,"en_sala")}>A sala</Btn>}
+                            {puedeQrAreaMedica(t) && <Btn variant="outline" sm title="QR área médica" onClick={()=>{setQrTurno(t);setQrOpen(true)}}><QrCode size={12}/></Btn>}
+                            <Btn variant="danger" sm onClick={()=>{setDetailTurno(t)}}><Trash2 size={11}/></Btn>
                           </div>
                         </td>
                       </tr>
@@ -2152,80 +2782,350 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
         </div>
       )}
 
-      <Modal open={qrOpen} onClose={() => { setQrOpen(false); setQrTurno(null) }} title={qrTurno ? `QR área médica — ${qrTurno.cliente}` : "QR"}
-        footer={<Btn variant="outline" onClick={() => { setQrOpen(false); setQrTurno(null) }}>Cerrar</Btn>}>
-        {qrTurno && (
-          <div style={{ textAlign:"center" }}>
-            <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>
-              Quien atiende escanea el código con el celular (misma app). Debe iniciar sesión como <strong>especialista</strong> o <strong>gerente</strong>.
-            </p>
-            {qrDataUrl
-              ? <img src={qrDataUrl} alt="Código QR sesión médica" style={{ width: "min(260px, 88vw)", height: "auto", maxWidth: "100%", margin: "0 auto", display: "block", borderRadius: 12, border: `1px solid ${C.border}` }} />
-              : <div style={{ padding: 48, color: C.muted, fontSize: 13 }}>Generando código…</div>}
-            <div style={{ marginTop: 16 }}>
-              <Btn
-                sm
-                onClick={() => {
-                  const link = buildDoctorSessionUrl({ clinicId: clinic, turnoId: qrTurno.id })
-                  navigator.clipboard.writeText(link).catch(() => {})
-                }}
-              >
-                <Copy size={12}/> Copiar enlace
-              </Btn>
+      {/* ── VISTA MES ───────────────────────────────────────── */}
+      {calView==="mes" && (
+        <div style={{ background:C.card, borderRadius:16, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+          {/* Cabecera días semana */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", borderBottom:`1.5px solid ${C.border}` }}>
+            {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map(d=>(
+              <div key={d} style={{ padding:"10px 0", textAlign:"center", fontSize:11, fontWeight:700, color:C.muted, letterSpacing:.5, textTransform:"uppercase" }}>{d}</div>
+            ))}
+          </div>
+          {/* Grid de días */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+            {monthGridDays.map((d, i) => {
+              const ds = d.toISOString().slice(0,10)
+              const isToday = ds === TODAY
+              const isCurMonth = d.getMonth() === monthDate.getMonth()
+              const dayTurnos = turnos.filter(t => t.fecha === ds)
+              const isLastRow = i >= 35
+              return (
+                <div key={ds}
+                  onClick={() => { setSelectedDay(ds); setCalView("dia") }}
+                  style={{
+                    minHeight: 110,
+                    borderRight: (i+1)%7===0 ? "none" : `1px solid ${C.border}`,
+                    borderBottom: isLastRow ? "none" : `1px solid ${C.border}`,
+                    padding: "6px 8px",
+                    cursor: "pointer",
+                    background: isToday ? "rgba(99,102,241,0.04)" : "transparent",
+                    transition: "background .12s",
+                  }}
+                  onMouseEnter={e => { if (!isToday) e.currentTarget.style.background = "rgba(0,0,0,.025)" }}
+                  onMouseLeave={e => { e.currentTarget.style.background = isToday ? "rgba(99,102,241,0.04)" : "transparent" }}
+                >
+                  {/* Número del día */}
+                  <div style={{ display:"flex", justifyContent:"center", marginBottom:4 }}>
+                    <div style={{
+                      width:28, height:28, borderRadius:"50%",
+                      background: isToday ? C.violet : "transparent",
+                      color: isToday ? "#fff" : isCurMonth ? C.text : C.muted,
+                      fontSize: 13, fontWeight: isToday ? 800 : isCurMonth ? 600 : 400,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                    }}>{d.getDate()}</div>
+                  </div>
+                  {/* Chips de turnos */}
+                  {dayTurnos.slice(0, 3).map(t => (
+                    <div key={t.id}
+                      onClick={e => { e.stopPropagation(); setDetailTurno(t) }}
+                      style={{
+                        marginBottom: 2,
+                        padding: "2px 6px",
+                        borderRadius: 4,
+                        background: catColor[t.cat] ?? catColor.clinico,
+                        borderLeft: `3px solid ${catBorder[t.cat] ?? catBorder.clinico}`,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: catTxt[t.cat] ?? catTxt.clinico,
+                        whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis",
+                        cursor:"pointer",
+                      }}
+                      title={`${t.hora} · ${t.cliente} · ${t.servicio}`}
+                    >
+                      {t.hora} {t.cliente?.split(" ")[0]}
+                    </div>
+                  ))}
+                  {dayTurnos.length > 3 && (
+                    <div style={{ fontSize:10, color:C.muted, fontWeight:600, paddingLeft:4 }}>+{dayTurnos.length-3} más</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── CALENDAR GRID (semana / día) ─────────────────────── */}
+      {(calView==="semana"||calView==="dia") && (
+        <div style={{ background:C.card, borderRadius:16, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,.06)", display:"flex", flexDirection:"column", ...(fullscreen ? { flex:1, minHeight:0 } : {}) }}>
+          {/* Cabecera de días */}
+          <div style={{ display:"grid", gridTemplateColumns:`52px repeat(${viewDays.length},1fr)`, borderBottom:`1.5px solid ${C.border}`, background:C.card, zIndex:10 }}>
+            <div style={{ borderRight:`1px solid ${C.border}` }}/>
+            {viewDays.map((d,i) => {
+              const ds = d.toISOString().slice(0,10)
+              const isToday = ds===TODAY
+              const dow = (d.getDay()+6)%7
+              const cnt = turnos.filter(t=>t.fecha===ds).length
+              return (
+                <div key={i}
+                  style={{ padding:"10px 6px 8px", textAlign:"center", borderLeft:`1px solid ${C.border}`, background:isToday?C.violetLight:"transparent", cursor:calView==="semana"?"pointer":undefined }}
+                  onClick={()=>{ if(calView==="semana"){ setSelectedDay(ds); setCalView("dia") } }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:isToday?C.violet:C.muted, textTransform:"uppercase", letterSpacing:.5 }}>{DAY_SH[dow]}</div>
+                  <div style={{ width:34, height:34, borderRadius:"50%", background:isToday?C.violet:"transparent", color:isToday?"#fff":C.text, fontSize:18, fontWeight:800, display:"inline-flex", alignItems:"center", justifyContent:"center", marginTop:2 }}>{d.getDate()}</div>
+                  {cnt>0 && <div style={{ fontSize:9, color:isToday?C.violet:C.muted, marginTop:1, fontWeight:600 }}>{cnt} cita{cnt!==1?"s":""}</div>}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Grid de horas */}
+          <div style={{ overflowY:"auto", ...(fullscreen ? { flex:1, minHeight:0 } : { maxHeight:"calc(100vh - 310px)" }) }}>
+            <div style={{ display:"grid", gridTemplateColumns:`52px repeat(${viewDays.length},1fr)`, position:"relative", minHeight:`${HOURS.length*PX_PER_HOUR}px` }}>
+              {/* Columna de horas */}
+              <div style={{ borderRight:`1px solid ${C.border}`, position:"relative", background:C.card }}>
+                {HOURS.map(h=>(
+                  <div key={h} style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR - 9}px`, right:6, fontSize:10, color:C.muted, textAlign:"right", userSelect:"none", lineHeight:1, fontWeight:500 }}>
+                    {h < 12 ? `${h}:00` : h === 12 ? "12:00" : `${h}:00`}
+                  </div>
+                ))}
+              </div>
+
+              {/* Columnas de días */}
+              {viewDays.map((d,colI) => {
+                const ds = d.toISOString().slice(0,10)
+                const isToday = ds===TODAY
+                const dayTurnos = turnos.filter(t=>t.fecha===ds)
+                const { numCols, assignment } = computeColumns(dayTurnos)
+                return (
+                  <div key={colI} style={{ position:"relative", borderLeft:`1px solid ${C.border}`, background:isToday?"rgba(99,102,241,0.018)":"transparent" }}>
+                    {/* Líneas de hora */}
+                    {HOURS.map(h=>(
+                      <div key={h}>
+                        <div style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR}px`, left:0, right:0, height:1, background:C.border, pointerEvents:"none" }}/>
+                        <div style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR+PX_PER_HOUR/4}px`, left:8, right:0, height:1, background:C.subtle, opacity:.5, pointerEvents:"none" }}/>
+                        <div style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR+PX_PER_HOUR/2}px`, left:0, right:0, height:1, background:C.subtle, pointerEvents:"none" }}/>
+                        <div style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR+3*PX_PER_HOUR/4}px`, left:8, right:0, height:1, background:C.subtle, opacity:.5, pointerEvents:"none" }}/>
+                      </div>
+                    ))}
+                    {/* Zonas clicables para crear turno */}
+                    {HOURS.flatMap(h=>[0,30].map(m=>(
+                      <div key={`${h}:${m}`}
+                        title={`Nueva cita ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`}
+                        style={{ position:"absolute", top:`${(h-HOUR_START)*PX_PER_HOUR+m*(PX_PER_HOUR/60)}px`, left:0, right:0, height:`${PX_PER_HOUR/2}px`, cursor:"pointer", zIndex:2 }}
+                        onClick={()=>openNewTurnoAt(ds,`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`)}
+                      />
+                    )))}
+                    {/* Línea de hora actual */}
+                    {isToday && nowY>=0 && nowY<=HOURS.length*PX_PER_HOUR && (
+                      <div style={{ position:"absolute", top:`${nowY}px`, left:0, right:0, height:2, background:"#EF4444", zIndex:20, pointerEvents:"none" }}>
+                        <div style={{ position:"absolute", left:-5, top:-4, width:10, height:10, borderRadius:"50%", background:"#EF4444" }}/>
+                      </div>
+                    )}
+                    {/* Bloques de turno */}
+                    {dayTurnos.map(t=>{
+                      const topY = timeToY(t.hora)
+                      if (topY < 0 || topY > HOURS.length*PX_PER_HOUR) return null
+                      const dur = getDuracion(t)
+                      const hPx = Math.max(24, dur*(PX_PER_HOUR/60))
+                      const ci = assignment[t.id]??0
+                      const colW = numCols>1 ? `calc(${100/numCols}% - 4px)` : "calc(100% - 8px)"
+                      const colL = numCols>1 ? `calc(${ci*100/numCols}% + 2px)` : "4px"
+                      const bg = catColor[t.cat]??catColor.clinico
+                      const bd = catBorder[t.cat]??catBorder.clinico
+                      const tx = catTxt[t.cat]??catTxt.clinico
+                      const canc = t.estado==="cancelado"
+                      const turnoPid = t.pacienteId ?? findPacienteIdByNombre(data, t.cliente, clinic)
+                      const turnoBonos = turnoPid ? (bonosPorPacienteId.get(+turnoPid) || []) : []
+                      return (
+                        <div key={t.id}
+                          onClick={()=>setDetailTurno(t)}
+                          style={{ position:"absolute", top:`${topY+1}px`, left:colL, width:colW, height:`${hPx-2}px`,
+                            background:canc?"#F1F5F9":bg,
+                            borderLeft:`3px solid ${canc?"#94A3B8":bd}`,
+                            borderRadius:6, padding:"4px 7px", overflow:"hidden", cursor:"pointer", zIndex:10,
+                            boxShadow:"0 1px 3px rgba(0,0,0,.08)", opacity:canc?.45:1,
+                            transition:"opacity .1s, box-shadow .1s" }}>
+                          <div style={{ fontSize:11, fontWeight:700, color:canc?"#94A3B8":tx, lineHeight:1.35, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                            {t.hora} · {t.cliente?.split(" ")[0]}
+                            {turnoBonos.length > 0 && !canc && (
+                              <Gift size={9} style={{ display:"inline", verticalAlign:"middle", marginLeft:3, opacity:.9 }}/>
+                            )}
+                          </div>
+                          {hPx>38 && <div style={{ fontSize:10, color:canc?"#94A3B8":tx, opacity:.85, lineHeight:1.3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.servicio}</div>}
+                          {hPx>54 && <div style={{ fontSize:10, color:canc?"#94A3B8":tx, opacity:.65, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{profNombre(t.profesionalId)}</div>}
+                          {t.estado!=="pendiente" && hPx>24 && (
+                            <div style={{ position:"absolute", top:4, right:5, fontSize:9, fontWeight:700, color:canc?"#94A3B8":bd, background:"rgba(255,255,255,.6)", borderRadius:3, padding:"0 3px", lineHeight:1.5 }}>
+                              {estadoLabel[t.estado]?.slice(0,5)}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
             </div>
-            <p style={{ fontSize: 10, color: C.muted, marginTop: 12, wordBreak: "break-all", textAlign: "left" }}>
-              {buildDoctorSessionUrl({ clinicId: clinic, turnoId: qrTurno.id })}
-            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL DETALLE TURNO ──────────────────────────────── */}
+      <Modal open={!!detailTurno} onClose={()=>setDetailTurno(null)}
+        title={detailTurno?`${detailTurno.cliente} — ${fmtDate(detailTurno.fecha)}${detailTurno.hora?` · ${detailTurno.hora}`:""}`:""  }
+        footer={
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", width:"100%" }}>
+            <div style={{ flex:1, display:"flex", gap:8, flexWrap:"wrap" }}>
+              {puedeCheckinBono && detailTurno?.estado==="pendiente" && <Btn sm onClick={()=>void setTurnoEstado(detailTurno.id,"confirmado")}>Confirmar llegada</Btn>}
+              {puedeCheckinBono && detailTurno?.estado==="confirmado" && <Btn sm onClick={()=>void setTurnoEstado(detailTurno.id,"en_sala")}>Enviar a sala</Btn>}
+              {detailTurno && puedeQrAreaMedica(detailTurno) && (esEspecialistaAgenda || role === "gerente") && (
+                <Btn sm variant="outline" onClick={()=>{setQrTurno(detailTurno);setDetailTurno(null);setQrOpen(true)}}><QrCode size={12}/> QR área médica</Btn>
+              )}
+            </div>
+            {puedeCheckinBono && (
+              <Btn variant="danger" sm onClick={()=>{if(detailTurno)del(detailTurno.id);setDetailTurno(null)}}><Trash2 size={12}/> Borrar</Btn>
+            )}
+            <Btn variant="outline" sm onClick={()=>setDetailTurno(null)}>Cerrar</Btn>
+          </div>
+        }>
+        {detailTurno && (
+          <div style={{ fontSize:13, display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              <Badge type={detailTurno.cat}>{catLabel[detailTurno.cat]||detailTurno.cat}</Badge>
+              <Badge type={detailTurno.estado}>{estadoLabel[detailTurno.estado]}</Badge>
+            </div>
+            <div><strong>Servicio:</strong> {detailTurno.servicio||"—"}</div>
+            <div><strong>Profesional:</strong> {profNombre(detailTurno.profesionalId)}</div>
+            {detailTurno.tel && (
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <strong>Teléfono:</strong>
+                <a href={waUrl(detailTurno.tel,`Hola ${detailTurno.cliente}, te recordamos tu cita del ${fmtDate(detailTurno.fecha)} a las ${detailTurno.hora||""}. ¿Confirmás asistencia?`)}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ color:C.success, fontWeight:600, textDecoration:"none", display:"flex", alignItems:"center", gap:4 }}>
+                  <MessageCircle size={13}/> {detailTurno.tel} (WhatsApp)
+                </a>
+              </div>
+            )}
+            {detailTurno.salaTrabajo && <div><strong>Sala:</strong> {detailTurno.salaTrabajo}</div>}
+            {detailTurno.obs && <div><strong>Notas:</strong> {detailTurno.obs}</div>}
+            {detailPacienteHit && (
+              <div style={{ fontSize:12, color:C.muted }}>
+                <strong style={{ color:C.text }}>Paciente:</strong>{" "}
+                {detailPacienteHit.esPaciente ? "Historial clínico activo" : "Cliente / lead (sin historial clínico aún)"}
+              </div>
+            )}
+            {bonosPacienteDetail.length > 0 && (
+              <div style={{ marginTop:4, padding:12, borderRadius:12, background:"#F5F3FF", border:`1px solid ${C.violet}33` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                  <Gift size={16} color={C.violet}/>
+                  <strong style={{ fontSize:13, color:C.violet }}>
+                    {puedeCheckinBono ? "Check-in bono — Recepción" : "Bono activo (solo lectura)"}
+                  </strong>
+                </div>
+                {bonosPacienteDetail.map(b => (
+                  <div key={b.id} style={{ fontSize:12, marginBottom:6, lineHeight:1.45 }}>
+                    <strong>{b.nombre}</strong>
+                    {" · "}{b.sesionesUsadas}/{b.sesionesTotal} sesiones
+                    {" · "}próxima: sesión {b.sesionesUsadas + 1}
+                    {" · "}debe {fmt(bonoSaldoDebe(b))}
+                  </div>
+                ))}
+                {sesionMarcadaTurno && (
+                  <div style={{ fontSize:12, color:"#047857", fontWeight:700, marginBottom:8, padding:"8px 10px", background:"#ECFDF5", borderRadius:8 }}>
+                    ✓ Sesión {sesionMarcadaTurno.numeroSesion} marcada en recepción
+                    {sesionMarcadaTurno.cobroMonto > 0 ? ` · cobró ${fmt(sesionMarcadaTurno.cobroMonto)}` : " · sin cobro en esta visita"}
+                  </div>
+                )}
+                {puedeCheckinBono && !sesionMarcadaTurno && (
+                  <>
+                    <p style={{ fontSize:11, color:C.muted, margin:"0 0 10px", lineHeight:1.45 }}>
+                      Verificá al paciente, marcá la sesión que corresponde, registrá el abono (puede ser €0) y enviá al especialista.
+                    </p>
+                    <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "1fr 100px 120px auto", gap:8, alignItems:"end" }}>
+                      <select style={inp} value={bonoAgendaSel} onChange={e=>setBonoAgendaSel(e.target.value)}>
+                        {bonosPacienteDetail.map(b => (
+                          <option key={b.id} value={b.id}>{b.nombre} · sesión {b.sesionesUsadas + 1} de {b.sesionesTotal}</option>
+                        ))}
+                      </select>
+                      <input type="number" min={0} style={inp} value={bonoAgendaCobro} onChange={e=>setBonoAgendaCobro(e.target.value)} placeholder="Abono €"/>
+                      <select style={inp} value={bonoAgendaMetodo} onChange={e=>setBonoAgendaMetodo(e.target.value)}>
+                        <option value="efectivo">Efectivo</option>
+                        <option value="tarjeta">Tarjeta</option>
+                        <option value="transferencia">Transferencia</option>
+                      </select>
+                      <Btn sm onClick={()=>void checkinBonoRecepcion()} disabled={bonoAgendaBusy || !bonoAgendaSel}>
+                        {bonoAgendaBusy ? "..." : "Marcar sesión + cobro"}
+                      </Btn>
+                    </div>
+                  </>
+                )}
+                {esEspecialistaAgenda && !sesionMarcadaTurno && bonosPacienteDetail.length > 0 && (
+                  <div style={{ fontSize:12, color:"#B45309", fontWeight:600, padding:"8px 10px", background:"#FFFBEB", borderRadius:8 }}>
+                    Pendiente check-in en recepción (sesión y cobro). Vos solo procesás el tratamiento en área médica.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>
 
+      {/* ── QR MODAL ────────────────────────────────────────── */}
+      <Modal open={qrOpen} onClose={()=>{setQrOpen(false);setQrTurno(null)}} title={qrTurno?`QR área médica — ${qrTurno.cliente}`:"QR"}
+        footer={<Btn variant="outline" onClick={()=>{setQrOpen(false);setQrTurno(null)}}>Cerrar</Btn>}>
+        {qrTurno && (
+          <div style={{ textAlign:"center" }}>
+            <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>Quien atiende escanea con el celular. Debe iniciar sesión como <strong>especialista</strong> o <strong>gerente</strong>.</p>
+            {qrDataUrl
+              ? <img src={qrDataUrl} alt="QR sesión médica" style={{ width:"min(260px,88vw)", height:"auto", maxWidth:"100%", margin:"0 auto", display:"block", borderRadius:12, border:`1px solid ${C.border}` }}/>
+              : <div style={{ padding:48, color:C.muted, fontSize:13 }}>Generando código…</div>}
+            <div style={{ marginTop:14, display:"flex", gap:8, flexWrap:"wrap" }}>
+              <input style={{...inp,flex:1,minWidth:0}} value={qrBaseDraft} onChange={e=>setQrBaseDraft(e.target.value)} placeholder={typeof window!=="undefined"?window.location.origin:"http://…"}/>
+              <Btn type="button" onClick={saveQrBase} style={{ justifyContent:"center" }}>Guardar URL base</Btn>
+            </div>
+            <div style={{ marginTop:10, display:"flex", gap:8, justifyContent:"center" }}>
+              <Btn sm onClick={()=>navigator.clipboard.writeText(buildDoctorSessionUrl({clinicId:clinic,turnoId:qrTurno.id})).catch(()=>{})}><Copy size={12}/> Copiar enlace</Btn>
+            </div>
+            <p style={{ fontSize:10, color:C.muted, marginTop:8, wordBreak:"break-all", textAlign:"left" }}>{buildDoctorSessionUrl({clinicId:clinic,turnoId:qrTurno.id})}</p>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── MODAL NUEVO TURNO ───────────────────────────────── */}
       <Modal open={open} onClose={()=>setOpen(false)} title="📅 Nuevo Turno"
-        footer={<><Btn variant="outline" onClick={()=>setOpen(false)} disabled={savingTurno}>Cancelar</Btn><Btn onClick={() => void save()} disabled={savingTurno}>{savingTurno ? "Guardando..." : "Guardar Turno"}</Btn></>}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        footer={<><Btn variant="outline" onClick={()=>setOpen(false)} disabled={savingTurno}>Cancelar</Btn><Btn onClick={()=>void save()} disabled={savingTurno}>{savingTurno?"Guardando...":"Guardar Turno"}</Btn></>}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
           {allowCrossClinicAgenda && (
             <FG label="Sede">
-              <select style={inp} value={form.clinicId} onChange={e=>u("clinicId", +e.target.value)}>
-                {sedesParaSelect.map(c => (
-                  <option key={c.id} value={c.id}>{c.nombre || `Clínica ${c.id}`}</option>
-                ))}
+              <select style={inp} value={form.clinicId} onChange={e=>u("clinicId",+e.target.value)}>
+                {sedesParaSelect.map(c=><option key={c.id} value={c.id}>{c.nombre||`Clínica ${c.id}`}</option>)}
               </select>
             </FG>
           )}
-          <FG label="Cliente existente (opcional)" full>
-            <select
-              style={inp}
-              value={form.clienteSelId || ""}
-              onChange={e => {
-                const id = +e.target.value
-                if (!id) {
-                  setForm(f => ({ ...f, clienteSelId: "" }))
-                  return
-                }
-                const hit = (data.pacientes || []).find(p => +p.id === id)
-                if (!hit) return
-                setForm(f => ({ ...f, clienteSelId: String(id), cliente: hit.nombre || "", tel: hit.tel || "", dni: hit.dni || "" }))
-              }}
-            >
+          <FG label="Cliente existente" full>
+            <select style={inp} value={form.clienteSelId||""} onChange={e=>{
+              const id=+e.target.value
+              if(!id){setForm(f=>({...f,clienteSelId:""}));return}
+              const hit=(data.pacientes||[]).find(p=>+p.id===id)
+              if(!hit)return
+              setForm(f=>({...f,clienteSelId:String(id),cliente:hit.nombre||"",tel:hit.tel||"",dni:hit.dni||""}))
+            }}>
               <option value="">Seleccionar cliente…</option>
-              {clientesForClinic.map(p => (
-                <option key={p.id} value={p.id}>{p.nombre}{p.tel ? ` — ${p.tel}` : ""}</option>
-              ))}
+              {clientesForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}{p.tel?` — ${p.tel}`:""}</option>)}
             </select>
           </FG>
-          <FG label="Cliente"><input style={inp} value={form.cliente} onChange={e => {
-            const nextNombre = e.target.value
-            setForm(f => {
-              if (!f.clienteSelId) return { ...f, cliente: nextNombre }
-              const base = (data.pacientes || []).find(p => String(p.id) === String(f.clienteSelId))
-              const same = String(base?.nombre || "").trim().toLowerCase() === String(nextNombre || "").trim().toLowerCase()
-              if (same) return { ...f, cliente: nextNombre }
-              // Si cambia el nombre tras seleccionar un cliente existente,
-              // evitamos arrastrar teléfono/DNI de otra persona por error.
-              return { ...f, clienteSelId: "", cliente: nextNombre, tel: "", dni: "" }
-            })
-          }} placeholder="Nombre del cliente"/></FG>
-          <FG label="Teléfono"><input style={inp} value={form.tel} onChange={e=>u("tel",e.target.value)} placeholder="+54 9 ..."/></FG>
+          <FG label="Cliente">
+            <input style={inp} value={form.cliente} onChange={e=>{
+              const n=e.target.value
+              setForm(f=>{
+                if(!f.clienteSelId)return{...f,cliente:n}
+                const base=(data.pacientes||[]).find(p=>String(p.id)===String(f.clienteSelId))
+                const same=String(base?.nombre||"").trim().toLowerCase()===String(n||"").trim().toLowerCase()
+                if(same)return{...f,cliente:n}
+                return{...f,clienteSelId:"",cliente:n,tel:"",dni:""}
+              })
+            }} placeholder="Nombre del cliente"/>
+          </FG>
+          <FG label="Teléfono"><input style={inp} value={form.tel} onChange={e=>u("tel",e.target.value)} placeholder="+34 6…"/></FG>
           <FG label="DNI" full><input style={inp} value={form.dni} onChange={e=>u("dni",e.target.value)} placeholder="Ej. 12345678"/></FG>
           <FG label="Fecha"><input type="date" style={inp} value={form.fecha} onChange={e=>u("fecha",e.target.value)}/></FG>
           <FG label="Hora"><input type="time" style={inp} value={form.hora} onChange={e=>u("hora",e.target.value)}/></FG>
@@ -2241,26 +3141,49 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
           </FG>
           <FG label="Servicio">
             <select style={inp} value={form.servicio} onChange={e=>u("servicio",e.target.value)}>
-              <option value="">{noServiciosEnCategoria ? "No hay ítems en esta categoría" : "Seleccionar…"}</option>
+              <option value="">{noServiciosEnCategoria?"Sin servicios":"Seleccionar…"}</option>
               {catSvcs.map(s=><option key={s.id} value={s.nombre}>{s.nombre}</option>)}
             </select>
           </FG>
-          <FG label="Centro / Sala de trabajo">
-            <input style={inp} value={form.salaTrabajo} onChange={e=>u("salaTrabajo", e.target.value)} placeholder="Ej: Sala 2 / Box Láser"/>
+          <FG label="Sala / Centro">
+            <input style={inp} value={form.salaTrabajo} onChange={e=>u("salaTrabajo",e.target.value)} placeholder="Ej: Sala 2"/>
           </FG>
           <FG label="Profesional">
-            <select style={inp} value={form.profesionalId} onChange={e=>u("profesionalId", e.target.value)}>
+            <select style={inp} value={form.profesionalId} onChange={e=>u("profesionalId",e.target.value)}>
               <option value="">Sin asignar</option>
-              {profsForClinic.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
             </select>
           </FG>
           <FG label="Observaciones" full>
             <textarea style={{...inp,resize:"vertical",minHeight:60}} value={form.obs} onChange={e=>u("obs",e.target.value)} placeholder="Notas…"/>
           </FG>
-          {noServiciosEnCategoria && <div style={{ gridColumn:"1 / -1", fontSize:12, color:C.muted }}>No hay servicios en esta categoría. Cargalos en la sección Servicios (o ejecutá el SQL de valoración en Supabase).</div>}
-          {form.cat === "valoracion" && <div style={{ gridColumn:"1 / -1", fontSize:12, color:C.muted, lineHeight:1.45 }}>
-            En <strong>valoración</strong> no hace falta definir todavía el tratamiento a cobrar: quien atiende lo registra luego en sala / área médica.
-          </div>}
+          {noServiciosEnCategoria && <div style={{ gridColumn:"1/-1", fontSize:12, color:C.muted }}>No hay servicios en esta categoría. Cargalos en Servicios.</div>}
+          {form.cat==="valoracion" && <div style={{ gridColumn:"1/-1", fontSize:12, color:C.muted, lineHeight:1.45 }}>En <strong>valoración</strong> el tratamiento se registra luego desde sala / área médica.</div>}
+          {(pacienteFormHit || bonosPacienteForm.length > 0) && (
+            <div style={{ gridColumn:"1/-1", padding:12, borderRadius:12, background:C.subtle, border:`1px solid ${C.border}` }}>
+              {pacienteFormHit && (
+                <div style={{ fontSize:12, marginBottom: bonosPacienteForm.length ? 8 : 0 }}>
+                  <Badge type={pacienteFormHit.esPaciente ? "confirmado" : "gray"}>
+                    {pacienteFormHit.esPaciente ? "Paciente con historial" : "Cliente / nuevo"}
+                  </Badge>
+                  {pacienteFormHit.tel && <span style={{ marginLeft:8, color:C.muted }}>{pacienteFormHit.tel}</span>}
+                </div>
+              )}
+              {bonosPacienteForm.length > 0 && (
+                <div style={{ fontSize:12, lineHeight:1.5 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                    <Gift size={14} color={C.violet}/>
+                    <strong style={{ color:C.violet }}>{bonosPacienteForm.length} bono(s) activo(s)</strong>
+                  </div>
+                  {bonosPacienteForm.map(b => (
+                    <div key={b.id} style={{ color:C.text }}>
+                      · {b.nombre}: {bonoSesionesRestantes(b)} sesiones · debe {fmt(bonoSaldoDebe(b))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Modal>
     </div>
@@ -2278,6 +3201,8 @@ function Stock({ data, clinic, setData, onPersist, role }) {
   const [openRecepcion, setOpenRecepcion] = useState(false)
   const [openTraslado, setOpenTraslado] = useState(false)
   const [openScan, setOpenScan] = useState(false)
+  const [openMerma, setOpenMerma] = useState(false)
+  const [mermaForm, setMermaForm] = useState({ productoId: "", cantidad: 1, motivo: "contaminacion", notas: "", profesional: "" })
   const [search, setSearch] = useState("")
   const [catF, setCatF] = useState("")
   const [scanErr, setScanErr] = useState("")
@@ -2499,15 +3424,38 @@ function Stock({ data, clinic, setData, onPersist, role }) {
   const adjust = (id,d) => setData(dd=>({...dd,clinics:{...dd.clinics,[clinic]:{...dd.clinics[clinic],
     stock:dd.clinics[clinic].stock.map(p=>p.id===id?{...p,stock:Math.max(0,p.stock+d)}:p)
   }}}))
-  const del = id => {
+  const del = async id => {
     const enUso = (data.servicios || []).some(s => (s.materialesStockIds || []).includes(id))
     if (enUso) {
       alert("No podés eliminar este artículo: está asignado a uno o más servicios.")
       return
     }
+    if (role !== "gerente") {
+      alert("Solo el gerente puede eliminar artículos del inventario.")
+      return
+    }
+    if (!window.confirm("¿Eliminar este artículo del inventario?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error: eApc } = await supabase
+        .from("articulos_por_clinica")
+        .delete()
+        .eq("clinic_id", clinic)
+        .eq("articulo_id", id)
+      if (eApc) {
+        alert("No se pudo borrar el stock de la clínica: " + (eApc.message || eApc))
+        return
+      }
+      const { error: eArt } = await supabase.from("articulos").delete().eq("id", id)
+      if (eArt) {
+        alert("Stock de clínica borrado, pero no se pudo quitar del catálogo: " + (eArt.message || eArt))
+        await onPersist?.()
+        return
+      }
+    }
     setData(d=>({...d,clinics:{...d.clinics,[clinic]:{...d.clinics[clinic],
       stock:d.clinics[clinic].stock.filter(p=>p.id!==id)
     }}}))
+    await onPersist?.()
   }
   const save = async () => {
     if(!form.nombre) return
@@ -2577,6 +3525,29 @@ function Stock({ data, clinic, setData, onPersist, role }) {
     }] }))
     setProvForm({ nombre:"", contacto:"", tel:"", email:"", productosText:"" })
     setOpenProv(false)
+  }
+
+  const delProveedor = async id => {
+    const pedidosVinculados = (data.pedidosProveedor || []).filter(p => +p.proveedorId === +id)
+    if (pedidosVinculados.length) {
+      alert("No podés eliminar este proveedor: tiene pedidos registrados.")
+      return
+    }
+    const incidencias = (data.incidenciasProveedor || []).filter(i => +i.proveedorId === +id)
+    if (incidencias.length) {
+      alert("No podés eliminar este proveedor: tiene incidencias registradas.")
+      return
+    }
+    if (!window.confirm("¿Eliminar este proveedor y su catálogo de productos?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("proveedores").delete().eq("id", id)
+      if (error) {
+        alert(error.message || "No se pudo eliminar el proveedor.")
+        return
+      }
+      await onPersist?.()
+    }
+    setData(d => ({ ...d, proveedores: (d.proveedores || []).filter(p => p.id !== id) }))
   }
 
   const setPedidoItem = (idx, patch) => {
@@ -2870,8 +3841,10 @@ function Stock({ data, clinic, setData, onPersist, role }) {
     const code = String(codeRaw || "").trim()
     if (!code) return
     setLoadingBarcode(true)
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 8000)
     try {
-      const r = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
+      const r = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`, { signal: ctrl.signal })
       const j = await r.json().catch(() => ({}))
       const p = j?.product || {}
       setForm(f => ({
@@ -2883,9 +3856,12 @@ function Stock({ data, clinic, setData, onPersist, role }) {
       if (!p.product_name && !p.product_name_es && !p.image_front_url && !p.image_url) {
         setScanErr("No se encontró info para ese código. Igual podés cargarlo manualmente.")
       } else setScanErr("")
-    } catch {
-      setScanErr("No se pudo consultar el catálogo por código de barras.")
+    } catch (e) {
+      setScanErr(e?.name === "AbortError"
+        ? "La consulta por código de barras tardó demasiado. Cargá el producto manualmente."
+        : "No se pudo consultar el catálogo por código de barras.")
     } finally {
+      clearTimeout(timer)
       setLoadingBarcode(false)
     }
   }
@@ -2942,6 +3918,7 @@ function Stock({ data, clinic, setData, onPersist, role }) {
           <p style={{fontSize:13,color:C.muted,marginTop:2}}>Clínica {clinic} · {all.length} productos</p>
         </div>
         <div style={{ display:"flex", gap:8 }}>
+          {tab === "articulos" && <Btn variant="outline" onClick={()=>setOpenMerma(true)} style={{ color:"#DC2626", borderColor:"#FCA5A5" }}><Trash2 size={14}/> Registrar merma</Btn>}
           {tab === "articulos" && <Btn onClick={()=>setOpen(true)}><Plus size={14}/> Agregar Producto</Btn>}
           {tab === "proveedores" && <Btn onClick={()=>setOpenProv(true)}><Plus size={14}/> Nuevo Proveedor</Btn>}
           {tab === "pedidos" && <Btn onClick={()=>setOpenPedido(true)}><Plus size={14}/> Nuevo Pedido</Btn>}
@@ -3032,7 +4009,12 @@ function Stock({ data, clinic, setData, onPersist, role }) {
             <div style={{ display:"grid", gridTemplateColumns:compact?"1fr":"repeat(2, minmax(260px, 1fr))", gap:12 }}>
               {proveedores.map(p => (
                 <div key={p.id} style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:14 }}>
-                  <div style={{ fontWeight:700 }}>{p.nombre}</div>
+                  <div style={{ display:"flex", justifyContent:"space-between", gap:8, alignItems:"flex-start" }}>
+                    <div style={{ fontWeight:700 }}>{p.nombre}</div>
+                    {(role === "gerente" || role === "encargado") && (
+                      <Btn variant="danger" sm onClick={() => void delProveedor(p.id)}><Trash2 size={11}/></Btn>
+                    )}
+                  </div>
                   <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>{p.contacto || "—"} · {p.tel || "—"}</div>
                   <div style={{ fontSize:12, color:C.muted }}>{p.email || "—"}</div>
                   <div style={{ fontSize:12, marginTop:8, color:C.text }}>Productos: {(p.productos || []).length}</div>
@@ -3303,6 +4285,96 @@ function Stock({ data, clinic, setData, onPersist, role }) {
           <div style={{ fontSize:12, color:C.muted }}>Apuntá al código. Se completará automáticamente al detectar.</div>
         </div>
       </Modal>
+
+      <Modal
+        open={openMerma}
+        onClose={() => { setOpenMerma(false); setMermaForm({ productoId:"", cantidad:1, motivo:"contaminacion", notas:"", profesional:"" }) }}
+        title="Registrar merma de producto"
+        footer={
+          <>
+            <Btn variant="outline" onClick={() => setOpenMerma(false)}>Cancelar</Btn>
+            <Btn
+              variant="danger"
+              onClick={async () => {
+                const prod = all.find(p => +p.id === +mermaForm.productoId)
+                if (!prod) return alert("Seleccioná un producto.")
+                const qty = +mermaForm.cantidad
+                if (!qty || qty <= 0) return alert("Cantidad inválida.")
+                if (qty > prod.stock) return alert(`Stock disponible: ${prod.stock} ${prod.unidad}. No podés descontar más de lo que hay.`)
+                const motivoLabel = { contaminacion:"Contaminación / sangre", caducado:"Producto caducado", rotura:"Rotura del envase", otro:"Otro motivo" }
+                const nota = `Merma — ${motivoLabel[mermaForm.motivo] || mermaForm.motivo}${mermaForm.profesional ? ` · Prof: ${mermaForm.profesional}` : ""}${mermaForm.notas ? ` · ${mermaForm.notas}` : ""}`
+                const nuevoStock = Math.max(0, prod.stock - qty)
+                if (import.meta.env.VITE_SUPABASE_URL) {
+                  const { error: eApc } = await supabase
+                    .from("articulos_por_clinica")
+                    .upsert({ clinic_id: clinic, articulo_id: prod.id, cantidad: nuevoStock }, { onConflict: "clinic_id,articulo_id" })
+                  if (eApc) { alert("No se pudo descontar el stock: " + (eApc.message || eApc)); return }
+                  const { error: eMov } = await supabase
+                    .from("clinic_movimientos")
+                    .insert({ clinic_id: clinic, tipo: "egreso", fecha: TODAY, concepto: nota, cat: "merma", monto: (prod.costo || 0) * qty })
+                  if (eMov) alert("Stock descontado, pero no se registró el movimiento contable: " + (eMov.message || eMov))
+                }
+                setData(d => ({
+                  ...d,
+                  clinics: {
+                    ...d.clinics,
+                    [clinic]: {
+                      ...d.clinics[clinic],
+                      stock: d.clinics[clinic].stock.map(p =>
+                        +p.id === +mermaForm.productoId ? { ...p, stock: Math.max(0, p.stock - qty) } : p
+                      ),
+                      movimientos: [
+                        ...(d.clinics[clinic].movimientos || []),
+                        {
+                          id: Date.now(),
+                          tipo: "egreso",
+                          fecha: TODAY,
+                          concepto: nota,
+                          cat: "merma",
+                          monto: (prod.costo || 0) * qty,
+                        },
+                      ],
+                    },
+                  },
+                }))
+                setOpenMerma(false)
+                setMermaForm({ productoId:"", cantidad:1, motivo:"contaminacion", notas:"", profesional:"" })
+              }}
+            >
+              Confirmar merma
+            </Btn>
+          </>
+        }
+      >
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ background:"#FEF2F2", border:"1px solid #FECACA", borderRadius:10, padding:10, fontSize:12, color:"#991B1B" }}>
+            Registra producto descartado por contaminación (sangre), caducidad u otro motivo. El stock se descuenta automáticamente y queda trazabilidad en contabilidad.
+          </div>
+          <FG label="Producto" full>
+            <select style={inp} value={mermaForm.productoId} onChange={e=>setMermaForm(f=>({...f, productoId:e.target.value}))}>
+              <option value="">Seleccionar producto…</option>
+              {all.map(p => <option key={p.id} value={p.id}>{p.nombre} (stock actual: {p.stock} {p.unidad})</option>)}
+            </select>
+          </FG>
+          <FG label="Cantidad descartada" full>
+            <input type="number" min={1} style={inp} value={mermaForm.cantidad} onChange={e=>setMermaForm(f=>({...f, cantidad:e.target.value}))} placeholder="Ej: 1"/>
+          </FG>
+          <FG label="Motivo" full>
+            <select style={inp} value={mermaForm.motivo} onChange={e=>setMermaForm(f=>({...f, motivo:e.target.value}))}>
+              <option value="contaminacion">Contaminación / sangre del paciente</option>
+              <option value="caducado">Producto caducado</option>
+              <option value="rotura">Rotura del envase</option>
+              <option value="otro">Otro motivo</option>
+            </select>
+          </FG>
+          <FG label="Profesional responsable" full>
+            <input style={inp} value={mermaForm.profesional} onChange={e=>setMermaForm(f=>({...f, profesional:e.target.value}))} placeholder="Nombre del doctor / esteticista"/>
+          </FG>
+          <FG label="Notas adicionales" full>
+            <input style={inp} value={mermaForm.notas} onChange={e=>setMermaForm(f=>({...f, notas:e.target.value}))} placeholder="Ej: Nariz, paciente con historial de coagulación…"/>
+          </FG>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -3385,18 +4457,35 @@ function Contabilidad({ data, clinic, setData }) {
     return (data.alertasCobro || []).find(a => +a.turnoId === +turnoIdSel) || null
   }, [turnoIdSel, data.alertasCobro])
 
-  const save = () => {
+  const save = async () => {
     if(!form.concepto||!form.monto) return
-    const id = movs.length?Math.max(...movs.map(m=>m.id))+1:1
+    const monto = parseFloat(form.monto)||0
+    let id = movs.length?Math.max(...movs.map(m=>m.id))+1:1
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { data: ins, error } = await supabase
+        .from("clinic_movimientos")
+        .insert({ clinic_id: clinic, tipo: form.tipo, fecha: form.fecha, concepto: form.concepto, cat: form.cat, monto })
+        .select("id")
+        .single()
+      if (error) { alert("No se pudo guardar el movimiento: " + (error.message || error)); return }
+      if (ins?.id) id = ins.id
+    }
     setData(d=>({...d,clinics:{...d.clinics,[clinic]:{...d.clinics[clinic],
-      movimientos:[...d.clinics[clinic].movimientos,{...form,id,monto:parseFloat(form.monto)||0}]
+      movimientos:[...d.clinics[clinic].movimientos,{...form,id,monto}]
     }}}))
     setOpen(false)
     setForm({tipo:"ingreso",fecha:TODAY,concepto:"",cat:"servicios",monto:"",notas:""})
   }
-  const del = id => setData(d=>({...d,clinics:{...d.clinics,[clinic]:{...d.clinics[clinic],
-    movimientos:d.clinics[clinic].movimientos.filter(m=>m.id!==id)
-  }}}))
+  const del = async id => {
+    if (!window.confirm("¿Eliminar este movimiento contable?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("clinic_movimientos").delete().eq("id", id).eq("clinic_id", clinic)
+      if (error) { alert("No se pudo borrar el movimiento: " + (error.message || error)); return }
+    }
+    setData(d=>({...d,clinics:{...d.clinics,[clinic]:{...d.clinics[clinic],
+      movimientos:d.clinics[clinic].movimientos.filter(m=>m.id!==id)
+    }}}))
+  }
 
   return (
     <div>
@@ -3773,6 +4862,7 @@ function Servicios({ data, clinic, setData, onGoStock, onPersist }) {
       alert("No podés eliminar este servicio: ya está siendo usado en turnos o packs.")
       return
     }
+    if (!window.confirm(`¿Eliminar el servicio "${srv.nombre}"?`)) return
     if (!import.meta.env.VITE_SUPABASE_URL) {
       setData(d => ({ ...d, servicios: d.servicios.filter(s => s.id !== id) }))
       return
@@ -4198,7 +5288,7 @@ function Login({ onLogin }) {
           (msg.includes("SUPABASE_SERVICE_ROLE_KEY") || msg.includes("VITE_SUPABASE_URL"))
         ) {
           msg =
-            "Falta la configuración del entorno (URL de Supabase y clave de servicio en .env.local). Quien instaló la app debe completarlas y reiniciar npm run dev."
+            "Falta la configuración del entorno en el servidor (URL de Supabase y clave de servicio). Contactá a quien administra el sistema para completarla."
         }
         setErr(msg)
         return
@@ -4985,6 +6075,7 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
   }
   const delH = async id => {
     if (role === "recepcionista") return
+    if (!window.confirm("¿Eliminar esta evolución?")) return
     if (import.meta.env.VITE_SUPABASE_URL) {
       const { error } = await supabase.from("historial_clinico").delete().eq("id", id)
       if (error) {
@@ -4993,6 +6084,36 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
       }
     }
     setData(d => ({ ...d, historialClinico: d.historialClinico.filter(h => h.id !== id) }))
+  }
+  const delCliente = async () => {
+    if (!pSel || !sel) return
+    if (role === "recepcionista") {
+      alert("Solo gerente o encargado puede eliminar fichas.")
+      return
+    }
+    const turnosActivos = turnosDelPaciente.filter(t => !["cancelado", "finalizado"].includes(String(t.estado || "")))
+    if (turnosActivos.length) {
+      alert(`Este ${isClinica ? "paciente" : "cliente"} tiene ${turnosActivos.length} turno(s) activo(s). Cancelalos o borralos antes de eliminar la ficha.`)
+      return
+    }
+    const label = isClinica ? "paciente" : "cliente"
+    if (!window.confirm(`¿Eliminar la ficha de ${pSel.nombre}? Se borrarán evoluciones y consentimientos vinculados.`)) return
+    if (!window.confirm(`Confirmación final: NO se puede deshacer. ¿Eliminar ${label} "${pSel.nombre}"?`)) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("clientes").delete().eq("id", sel)
+      if (error) {
+        alert(error.message || "No se pudo eliminar la ficha.")
+        return
+      }
+    }
+    setData(d => ({
+      ...d,
+      pacientes: (d.pacientes || []).filter(p => p.id !== sel),
+      historialClinico: (d.historialClinico || []).filter(h => h.pacienteId !== sel),
+      consentimientosFirmados: (d.consentimientosFirmados || []).filter(c => c.clienteId !== sel),
+    }))
+    setSel(null)
+    onConsentSaved?.()
   }
   const saveCliente = async () => {
     const nombre = String(formCliente.nombre || "").trim()
@@ -5420,6 +6541,9 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
                   </div>
                   {notas && <div style={{ fontSize:12, color:C.warning, marginTop:8, background:"#FFFBEB", padding:"8px 12px", borderRadius:8 }}>⚠ {notas}</div>}
                 </div>
+                {(role === "gerente" || role === "encargado") && (
+                  <Btn variant="danger" sm onClick={() => void delCliente()}><Trash2 size={12}/> Eliminar ficha</Btn>
+                )}
               </div>
 
               <TabBar tabs={isClinica
@@ -5907,7 +7031,7 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
 }
 
 // ─── SECTION: EMPLEADOS & TURNOS LABORALES ─────────────────────
-function PersonalTurnos({ data, setData, role }) {
+function PersonalTurnos({ data, setData, role, clinic }) {
   const compact = useMediaQuery("(max-width: 980px)")
   const [tab, setTab] = useState("empleados")
   const [openE, setOpenE] = useState(false)
@@ -5925,6 +7049,7 @@ function PersonalTurnos({ data, setData, role }) {
   const ut = (k,v) => setFormT(f => ({ ...f, [k]:v }))
   const readOnly = role !== "gerente"
   const hydratedFromDbRef = useRef(false)
+  const hydratedFranjasRef = useRef(false)
   const TEAM_STORAGE_BY_NAME = {
     felipe: "https://heybobhlhjidrptgbklk.supabase.co/storage/v1/object/public/erp-media/empleados/c9ab5394-b788-486b-9857-5e20a9f9e58e/1775562186540-p19bxmc.jpg",
     betty: "https://heybobhlhjidrptgbklk.supabase.co/storage/v1/object/public/erp-media/empleados/c9ab5394-b788-486b-9857-5e20a9f9e58e/1775562367898-7giux3b.jpg",
@@ -6009,22 +7134,157 @@ function PersonalTurnos({ data, setData, role }) {
     return () => { cancelled = true }
   }, [data.empleados, setData])
 
-  const saveE = () => {
+  useEffect(() => {
+    if (hydratedFranjasRef.current) return
+    if (!import.meta.env.VITE_SUPABASE_URL) return
+    let cancelled = false
+    ;(async () => {
+      const { data: rows, error } = await supabase
+        .from("agenda_disponibilidad")
+        .select("id, clinic_id, empleado_id, dia_semana, hora_desde, hora_hasta, nota, activo")
+        .eq("activo", true)
+        .order("dia_semana")
+      if (cancelled || error) return
+      hydratedFranjasRef.current = true
+      setData(d => ({
+        ...d,
+        turnosLaborales: (rows || []).map(r => ({
+          id: r.id,
+          clinicId: r.clinic_id,
+          empleadoId: r.empleado_id,
+          diaSemana: r.dia_semana,
+          entrada: r.hora_desde || "09:00",
+          salida: r.hora_hasta || "18:00",
+          nota: r.nota || "",
+        })),
+      }))
+    })()
+    return () => { cancelled = true }
+  }, [setData])
+
+  const saveE = async () => {
     if (!formE.nombre.trim()) return
+    const clinicId = clinic != null && Number.isFinite(Number(clinic)) ? Number(clinic) : (data.empleados.find(e => e.clinicId)?.clinicId || 1)
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const rol = String(formE.cargo || "recepcionista")
+      const payload = {
+        clinic_id: rol === "gerente" ? (clinicId || null) : clinicId,
+        nombre: formE.nombre.trim(),
+        email: String(formE.email || "").trim(),
+        tel: String(formE.tel || "").trim(),
+        rol,
+        activo: formE.activo !== false,
+      }
+      const { data: ins, error } = await supabase
+        .from("empleados")
+        .insert(payload)
+        .select("id, clinic_id, nombre, email, tel, rol, activo, especialidad, comision_pct, color, foto_url, documento, fecha_nacimiento, direccion, fecha_ingreso, contacto_emergencia, tel_emergencia, notas, historial")
+        .single()
+      if (error) {
+        alert(error.message || "No se pudo crear el empleado. Solo el gerente puede dar de alta personal.")
+        return
+      }
+      setData(d => ({
+        ...d,
+        empleados: [...d.empleados, {
+          id: ins.id,
+          clinicId: ins.clinic_id,
+          nombre: ins.nombre || "",
+          email: ins.email || "",
+          tel: ins.tel || "",
+          cargo: normalizeRol(ins.rol) || "recepcionista",
+          activo: ins.activo !== false,
+          especialidad: ins.especialidad || "",
+          comision: ins.comision_pct == null ? 0 : (+ins.comision_pct || 0),
+          color: ins.color || C.violet,
+          fotoUrl: ins.foto_url || "",
+          documento: ins.documento || "",
+          fechaNacimiento: ins.fecha_nacimiento || "",
+          direccion: ins.direccion || "",
+          fechaIngreso: ins.fecha_ingreso || "",
+          contactoEmergencia: ins.contacto_emergencia || "",
+          telEmergencia: ins.tel_emergencia || "",
+          notas: ins.notas || "",
+          historial: Array.isArray(ins.historial) ? ins.historial : [],
+        }],
+      }))
+      setOpenE(false)
+      setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true })
+      return
+    }
     const id = data.empleados.length ? Math.max(...data.empleados.map(e => e.id)) + 1 : 1
-    setData(d => ({ ...d, empleados: [...d.empleados, { ...formE, id, fotoUrl:"", documento:"", fechaNacimiento:"", direccion:"", fechaIngreso:TODAY, contactoEmergencia:"", telEmergencia:"", notas:"", historial:[] }] }))
+    setData(d => ({ ...d, empleados: [...d.empleados, { ...formE, id, clinicId, fotoUrl:"", documento:"", fechaNacimiento:"", direccion:"", fechaIngreso:TODAY, contactoEmergencia:"", telEmergencia:"", notas:"", historial:[] }] }))
     setOpenE(false)
     setFormE({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true })
   }
-  const delE = id => setData(d => ({ ...d, empleados: d.empleados.filter(e => e.id !== id), turnosLaborales: d.turnosLaborales.filter(t => t.empleadoId !== id) }))
-  const saveT = () => {
+  const delE = async id => {
+    if (!window.confirm("¿Eliminar este empleado y sus franjas horarias?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("empleados").delete().eq("id", id)
+      if (error) {
+        alert(error.message || "No se pudo eliminar. Solo el gerente puede borrar empleados.")
+        return
+      }
+    }
+    setData(d => ({ ...d, empleados: d.empleados.filter(e => e.id !== id), turnosLaborales: d.turnosLaborales.filter(t => t.empleadoId !== id) }))
+  }
+  const saveT = async () => {
     if (!formT.empleadoId) return
+    if (!formT.entrada || !formT.salida || formT.entrada >= formT.salida) {
+      alert("Horario inválido: la entrada debe ser anterior a la salida.")
+      return
+    }
+    const emp = data.empleados.find(e => +e.id === +formT.empleadoId)
+    const clinicId = emp?.clinicId || clinic || 1
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { data: ins, error } = await supabase
+        .from("agenda_disponibilidad")
+        .insert({
+          clinic_id: clinicId,
+          empleado_id: +formT.empleadoId,
+          dia_semana: +formT.diaSemana,
+          hora_desde: formT.entrada,
+          hora_hasta: formT.salida,
+          activo: true,
+        })
+        .select("id, clinic_id, empleado_id, dia_semana, hora_desde, hora_hasta, nota")
+        .single()
+      if (error) {
+        alert(error.message || "No se pudo guardar la franja horaria.")
+        return
+      }
+      setData(d => ({
+        ...d,
+        turnosLaborales: [...d.turnosLaborales, {
+          id: ins.id,
+          clinicId: ins.clinic_id,
+          empleadoId: ins.empleado_id,
+          diaSemana: ins.dia_semana,
+          entrada: ins.hora_desde || formT.entrada,
+          salida: ins.hora_hasta || formT.salida,
+          nota: ins.nota || "",
+        }],
+      }))
+      setOpenT(false)
+      setFormT({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
+      return
+    }
     const id = data.turnosLaborales.length ? Math.max(...data.turnosLaborales.map(t => t.id)) + 1 : 1
-    setData(d => ({ ...d, turnosLaborales: [...d.turnosLaborales, { ...formT, empleadoId:+formT.empleadoId, id, diaSemana:+formT.diaSemana }] }))
+    setData(d => ({ ...d, turnosLaborales: [...d.turnosLaborales, { ...formT, clinicId, empleadoId:+formT.empleadoId, id, diaSemana:+formT.diaSemana }] }))
     setOpenT(false)
     setFormT({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
   }
-  const delT = id => setData(d => ({ ...d, turnosLaborales: d.turnosLaborales.filter(t => t.id !== id) }))
+  const delT = async id => {
+    if (!window.confirm("¿Quitar esta franja horaria?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("agenda_disponibilidad").delete().eq("id", id)
+      if (error) {
+        alert(error.message || "No se pudo borrar la franja horaria.")
+        return
+      }
+    }
+    setData(d => ({ ...d, turnosLaborales: d.turnosLaborales.filter(t => t.id !== id) }))
+  }
   const patchEmp = (id, patcher) => setData(d => ({ ...d, empleados: d.empleados.map(e => e.id === id ? patcher(e) : e) }))
   const openFichaEmp = e => { setSelEmp(e); setOpenFicha(true) }
   const syncSelEmp = (id, patcher) => {
@@ -6223,7 +7483,7 @@ function PersonalTurnos({ data, setData, role }) {
       )}
 
       <Modal open={openE} onClose={()=>setOpenE(false)} title="Nuevo empleado"
-        footer={<><Btn variant="outline" onClick={()=>setOpenE(false)}>Cancelar</Btn><Btn onClick={saveE}>Guardar</Btn></>}>
+        footer={<><Btn variant="outline" onClick={()=>setOpenE(false)}>Cancelar</Btn><Btn onClick={() => void saveE()}>Guardar</Btn></>}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
           <FG label="Nombre" full><input style={inp} value={formE.nombre} onChange={e=>ue("nombre",e.target.value)}/></FG>
           <FG label="Rol en clínica">
@@ -6240,7 +7500,7 @@ function PersonalTurnos({ data, setData, role }) {
       </Modal>
 
       <Modal open={openT} onClose={()=>setOpenT(false)} title="Turno laboral"
-        footer={<><Btn variant="outline" onClick={()=>setOpenT(false)}>Cancelar</Btn><Btn onClick={saveT}>Guardar</Btn></>}>
+        footer={<><Btn variant="outline" onClick={()=>setOpenT(false)}>Cancelar</Btn><Btn onClick={() => void saveT()}>Guardar</Btn></>}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
           <FG label="Empleado" full>
             <select style={inp} value={formT.empleadoId} onChange={e=>ut("empleadoId",e.target.value)}>
@@ -6501,44 +7761,496 @@ function ReportesExport({ data, clinic }) {
   )
 }
 
+// ─── BONOS: helpers y persistencia ─────────────────────────────
+function bonoSesionesRestantes(b) {
+  return Math.max(0, (+b?.sesionesTotal || 0) - (+b?.sesionesUsadas || 0))
+}
+function bonoSaldoDebe(b) {
+  return Math.max(0, (+b?.precio || 0) - (+b?.montoPagado || 0))
+}
+function bonoPrecioPorSesion(b) {
+  const n = +b?.sesionesTotal || 1
+  return (+b?.precio || 0) / n
+}
+function bonoEstaActivo(b, hoy = TODAY) {
+  if (!b) return false
+  if (b.estado === "cancelado" || b.estado === "agotado") return false
+  if (bonoSesionesRestantes(b) <= 0) return false
+  if (b.vence && String(b.vence) < hoy) return false
+  return true
+}
+function bonosActivosPaciente(bonosPacks, pacienteId, clinicId) {
+  if (!pacienteId) return []
+  return (bonosPacks || []).filter(b => +b.pacienteId === +pacienteId && +b.clinicId === +clinicId && bonoEstaActivo(b))
+}
+function mapBonosRowsFromDb(packsRows, pagosRows, sesionesRows) {
+  return {
+    bonosPacks: (packsRows || []).map(r => ({
+      id: r.id,
+      clinicId: r.clinic_id,
+      pacienteId: r.paciente_id,
+      servicioId: r.servicio_id ?? undefined,
+      nombre: r.nombre || "",
+      sesionesTotal: +r.sesiones_total || 0,
+      sesionesUsadas: +r.sesiones_usadas || 0,
+      precio: +r.precio || 0,
+      montoPagado: +r.monto_pagado || 0,
+      estado: r.estado || "activo",
+      vence: r.vence || null,
+      obs: r.obs || "",
+    })),
+    bonosPagos: (pagosRows || []).map(r => ({
+      id: r.id,
+      bonoId: r.bono_id,
+      clinicId: r.clinic_id,
+      monto: +r.monto || 0,
+      metodoPago: r.metodo_pago || "efectivo",
+      fecha: r.fecha || TODAY,
+      notas: r.notas || "",
+      createdAt: r.created_at || null,
+    })),
+    bonosSesiones: (sesionesRows || []).map(r => ({
+      id: r.id,
+      bonoId: r.bono_id,
+      clinicId: r.clinic_id,
+      numeroSesion: +r.numero_sesion || 0,
+      turnoId: r.turno_id ?? undefined,
+      fecha: r.fecha || TODAY,
+      cobroMonto: +r.cobro_monto || 0,
+      notas: r.notas || "",
+      createdAt: r.created_at || null,
+    })),
+  }
+}
+async function fetchBonosSnapshot() {
+  if (!import.meta.env.VITE_SUPABASE_URL) return null
+  const [packsRes, pagosRes, sesRes] = await Promise.all([
+    supabase.from("bonos_packs").select("id, clinic_id, paciente_id, servicio_id, nombre, sesiones_total, sesiones_usadas, precio, monto_pagado, estado, vence, obs").order("id"),
+    supabase.from("bonos_pagos").select("id, bono_id, clinic_id, monto, metodo_pago, fecha, notas, created_at").order("created_at", { ascending: false }),
+    supabase.from("bonos_sesiones_uso").select("id, bono_id, clinic_id, numero_sesion, turno_id, fecha, cobro_monto, notas, created_at").order("created_at", { ascending: false }),
+  ])
+  if (packsRes.error) throw new Error(packsRes.error.message || String(packsRes.error))
+  return mapBonosRowsFromDb(packsRes.data, pagosRes.data, sesRes.data)
+}
+async function syncBonosToState(setData) {
+  try {
+    const snap = await fetchBonosSnapshot()
+    if (!snap) return
+    setData(d => ({ ...d, ...snap }))
+  } catch (e) {
+    console.warn("[bonos] sync:", e?.message || e)
+  }
+}
+async function registrarPagoBono({ bono, clinicId, monto, metodoPago = "efectivo", notas = "", fecha = TODAY, syncContabilidad = true }) {
+  const m = Math.max(0, +monto || 0)
+  if (import.meta.env.VITE_SUPABASE_URL) {
+    const { error } = await supabase.from("bonos_pagos").insert({
+      bono_id: bono.id,
+      clinic_id: +clinicId,
+      monto: m,
+      metodo_pago: metodoPago,
+      fecha,
+      notas: notas || "",
+    })
+    if (error) throw new Error(error.message || String(error))
+    if (syncContabilidad && m > 0) {
+      await supabase.from("clinic_movimientos").insert({
+        clinic_id: +clinicId,
+        tipo: "ingreso",
+        fecha,
+        concepto: `Bono «${bono.nombre}» — abono (${metodoPago})`,
+        cat: "servicios",
+        monto: m,
+      })
+    }
+    return
+  }
+  throw new Error("Supabase no configurado")
+}
+async function usarSesionBono({ bono, clinicId, turnoId = null, cobroMonto = 0, metodoPago = "efectivo", notas = "", fecha = TODAY, syncContabilidad = true }) {
+  if (bonoSesionesRestantes(bono) <= 0) throw new Error("No quedan sesiones en este bono.")
+  const numeroSesion = (+bono.sesionesUsadas || 0) + 1
+  const cobro = Math.max(0, +cobroMonto || 0)
+  if (import.meta.env.VITE_SUPABASE_URL) {
+    const { error: eSes } = await supabase.from("bonos_sesiones_uso").insert({
+      bono_id: bono.id,
+      clinic_id: +clinicId,
+      numero_sesion: numeroSesion,
+      turno_id: turnoId ?? null,
+      fecha,
+      cobro_monto: cobro,
+      notas: notas || "",
+    })
+    if (eSes) throw new Error(eSes.message || String(eSes))
+    const { error: eUpd } = await supabase.from("bonos_packs").update({ sesiones_usadas: numeroSesion }).eq("id", bono.id)
+    if (eUpd) throw new Error(eUpd.message || String(eUpd))
+    if (turnoId) {
+      await supabase.from("turnos").update({ bono_id: bono.id }).eq("id", turnoId)
+    }
+    if (cobro > 0) {
+      await registrarPagoBono({ bono, clinicId, monto: cobro, metodoPago, notas: notas ? `Sesión ${numeroSesion}: ${notas}` : `Cobro sesión ${numeroSesion}`, fecha, syncContabilidad })
+    }
+    return numeroSesion
+  }
+  throw new Error("Supabase no configurado")
+}
+
 // ─── SECTION: BONOS, PACKS Y SUSCRIPCIONES ─────────────────────
-function BonosPacks({ data, setData, clinic }) {
+function BonosPacks({ data, setData, clinic, onReloadBonos, role }) {
   const compact = useMediaQuery("(max-width: 980px)")
-  const packs = data.bonosPacks.filter(b => b.clinicId === clinic)
-  const subs = (data.suscripciones || []).filter(s => s.clinicId === clinic)
+  const puedeGestionar = puedeAdministrarBonos(role)
+  const puedeEliminar = puedeEliminarBonos(role)
+  const packs = (data.bonosPacks || []).filter(b => +b.clinicId === +clinic)
+  const subs = (data.suscripciones || []).filter(s => +s.clinicId === +clinic)
   const pacNombre = id => data.pacientes.find(p => p.id === id)?.nombre || "—"
   const svcNombre = id => data.servicios.find(s => s.id === id)?.nombre || "—"
+  const [openForm, setOpenForm] = useState(false)
+  const emptyForm = { pacienteId:"", servicioId:"", nombre:"", sesionesTotal:10, precio:"", pagoInicial:"", vence:"", obs:"" }
+  const [bonoForm, setBonoForm] = useState(emptyForm)
+  const ub = (k,v) => setBonoForm(f=>({...f,[k]:v}))
+  const [detailId, setDetailId] = useState(null)
+  const [pagoForm, setPagoForm] = useState({ monto:"", metodoPago:"efectivo", notas:"" })
+  const [sesionForm, setSesionForm] = useState({ cobroMonto:"", metodoPago:"efectivo", notas:"" })
+  const [busy, setBusy] = useState(false)
+  const detail = packs.find(b => b.id === detailId)
+  const pagosDetail = (data.bonosPagos || []).filter(p => p.bonoId === detailId)
+  const sesionesDetail = (data.bonosSesiones || []).filter(s => s.bonoId === detailId)
 
-  const usarSesion = id => {
-    setData(d => ({
-      ...d,
-      bonosPacks: d.bonosPacks.map(b => {
-        if (b.id !== id || b.sesionesUsadas >= b.sesionesTotal) return b
-        return { ...b, sesionesUsadas: b.sesionesUsadas + 1 }
-      }),
-    }))
+  const crearBono = async () => {
+    if (!bonoForm.pacienteId) { alert("Seleccioná un paciente."); return }
+    if (!bonoForm.nombre.trim()) { alert("Escribí un nombre para el bono."); return }
+    if (!bonoForm.sesionesTotal || +bonoForm.sesionesTotal < 1) { alert("Nº de sesiones inválido."); return }
+    setBusy(true)
+    try {
+      let newId = (data.bonosPacks.length ? Math.max(...data.bonosPacks.map(b=>b.id||0)) : 0) + 1
+      const precioTotal = bonoForm.precio ? +bonoForm.precio : 0
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { data: ins, error } = await supabase
+          .from("bonos_packs")
+          .insert({
+            clinic_id: +clinic,
+            paciente_id: +bonoForm.pacienteId,
+            servicio_id: bonoForm.servicioId ? +bonoForm.servicioId : null,
+            nombre: bonoForm.nombre.trim(),
+            sesiones_total: +bonoForm.sesionesTotal,
+            sesiones_usadas: 0,
+            precio: precioTotal,
+            vence: bonoForm.vence || null,
+            obs: bonoForm.obs || "",
+          })
+          .select("id, nombre")
+          .single()
+        if (error) throw new Error(error.message || String(error))
+        if (ins?.id) {
+          newId = ins.id
+          const pagoIni = Math.max(0, +bonoForm.pagoInicial || 0)
+          if (pagoIni > 0) {
+            await registrarPagoBono({
+              bono: { id: newId, nombre: ins.nombre || bonoForm.nombre.trim() },
+              clinicId: clinic,
+              monto: pagoIni,
+              metodoPago: "efectivo",
+              notas: "Pago inicial al crear el bono",
+            })
+          }
+        }
+        await syncBonosToState(setData)
+      } else {
+        const pagoIni = Math.max(0, +bonoForm.pagoInicial || 0)
+        const nuevo = {
+          id: newId,
+          clinicId: +clinic,
+          pacienteId: +bonoForm.pacienteId,
+          servicioId: bonoForm.servicioId ? +bonoForm.servicioId : undefined,
+          nombre: bonoForm.nombre.trim(),
+          sesionesTotal: +bonoForm.sesionesTotal,
+          sesionesUsadas: 0,
+          precio: precioTotal,
+          montoPagado: pagoIni,
+          estado: "activo",
+          vence: bonoForm.vence || null,
+          obs: bonoForm.obs || "",
+        }
+        setData(d => ({ ...d, bonosPacks: [...d.bonosPacks, nuevo] }))
+      }
+      setBonoForm(emptyForm)
+      setOpenForm(false)
+    } catch (e) {
+      alert(e?.message || "No se pudo crear el bono.")
+    } finally {
+      setBusy(false)
+    }
   }
+
+  const registrarPago = async () => {
+    if (!detail) return
+    setBusy(true)
+    try {
+      await registrarPagoBono({
+        bono: detail,
+        clinicId: clinic,
+        monto: pagoForm.monto,
+        metodoPago: pagoForm.metodoPago,
+        notas: pagoForm.notas,
+      })
+      await syncBonosToState(setData)
+      onReloadBonos?.()
+      setPagoForm({ monto:"", metodoPago:"efectivo", notas:"" })
+    } catch (e) {
+      alert(e?.message || "No se pudo registrar el pago.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const consumirSesion = async (turnoId = null) => {
+    if (!detail) return
+    setBusy(true)
+    try {
+      await usarSesionBono({
+        bono: detail,
+        clinicId: clinic,
+        turnoId,
+        cobroMonto: sesionForm.cobroMonto,
+        metodoPago: sesionForm.metodoPago,
+        notas: sesionForm.notas,
+      })
+      await syncBonosToState(setData)
+      onReloadBonos?.()
+      setSesionForm({ cobroMonto:"", metodoPago:"efectivo", notas:"" })
+    } catch (e) {
+      alert(e?.message || "No se pudo registrar la sesión.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deleteBono = async id => {
+    if (!window.confirm("¿Eliminar este bono/pack y todo su historial?")) return
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("bonos_packs").delete().eq("id", id)
+      if (error) { alert("No se pudo borrar el bono: " + (error.message || error)); return }
+      await syncBonosToState(setData)
+    } else {
+      setData(d => ({
+        ...d,
+        bonosPacks: d.bonosPacks.filter(b=>b.id!==id),
+        bonosPagos: (d.bonosPagos||[]).filter(p=>p.bonoId!==id),
+        bonosSesiones: (d.bonosSesiones||[]).filter(s=>s.bonoId!==id),
+      }))
+    }
+  }
+
+  const pacientesClinica = (data.pacientes||[]).filter(p=>+p.clinicId===+clinic)
+  const serviciosClinica = (data.servicios||[]).filter(s=>["clinico","facial","corporal","laser","botox"].includes(s.cat))
 
   return (
     <div>
-      <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Bonos, packs y suscripciones</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:22 }}>Pack de N sesiones: al atender, descontá una sesión; el paciente ve saldo restante (modelo Flowww).</p>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700 }}>Bonos, packs y suscripciones</h2>
+          <p style={{ fontSize:13, color:C.muted, marginTop:2, lineHeight:1.45 }}>
+            Recepción / contable marcan sesión y registran abonos. El especialista solo atiende en área médica.
+          </p>
+        </div>
+        <Btn onClick={()=>setOpenForm(true)} disabled={!puedeGestionar}><Plus size={14}/> Nuevo bono</Btn>
+      </div>
+
+      <Modal open={openForm} onClose={()=>!busy&&setOpenForm(false)} title="Nuevo bono / pack de sesiones"
+        footer={<><Btn variant="outline" onClick={()=>setOpenForm(false)} disabled={busy}>Cancelar</Btn><Btn onClick={()=>void crearBono()} disabled={busy}>{busy?"Guardando...":"Guardar bono"}</Btn></>}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <FG label="Paciente" full>
+            <select style={inp} value={bonoForm.pacienteId} onChange={e=>ub("pacienteId",e.target.value)}>
+              <option value="">Seleccionar paciente…</option>
+              {pacientesClinica.map(p=><option key={p.id} value={p.id}>{p.nombre}{p.tel?` — ${p.tel}`:""}</option>)}
+            </select>
+          </FG>
+          <FG label="Nombre del bono">
+            <input style={inp} value={bonoForm.nombre} onChange={e=>ub("nombre",e.target.value)} placeholder="Ej: Bono 10 láseres"/>
+          </FG>
+          <FG label="Servicio vinculado">
+            <select style={inp} value={bonoForm.servicioId} onChange={e=>ub("servicioId",e.target.value)}>
+              <option value="">Sin vincular</option>
+              {serviciosClinica.map(s=><option key={s.id} value={s.id}>{s.nombre}</option>)}
+            </select>
+          </FG>
+          <FG label="Nº de sesiones">
+            <input type="number" min={1} style={inp} value={bonoForm.sesionesTotal} onChange={e=>ub("sesionesTotal",e.target.value)}/>
+          </FG>
+          <FG label="Precio total (€)">
+            <input type="number" min={0} style={inp} value={bonoForm.precio} onChange={e=>ub("precio",e.target.value)} placeholder="300"/>
+          </FG>
+          <FG label="Pago inicial (€)">
+            <input type="number" min={0} style={inp} value={bonoForm.pagoInicial} onChange={e=>ub("pagoInicial",e.target.value)} placeholder="100 — puede ser 0"/>
+          </FG>
+          <FG label="Fecha de vencimiento">
+            <input type="date" style={inp} value={bonoForm.vence} onChange={e=>ub("vence",e.target.value)}/>
+          </FG>
+          <FG label="Notas" full>
+            <textarea style={{...inp,resize:"vertical",minHeight:50}} value={bonoForm.obs} onChange={e=>ub("obs",e.target.value)} placeholder="Observaciones…"/>
+          </FG>
+        </div>
+        {bonoForm.precio && (
+          <div style={{ marginTop:12, fontSize:12, color:C.muted, background:C.subtle, borderRadius:10, padding:10 }}>
+            Referencia: {fmt(bonoPrecioPorSesion({ sesionesTotal: +bonoForm.sesionesTotal||1, precio: +bonoForm.precio||0 }))} por sesión ·
+            {" "}Saldo inicial: {fmt(Math.max(0, (+bonoForm.precio||0) - (+bonoForm.pagoInicial||0)))}
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!detail} onClose={()=>!busy&&setDetailId(null)} title={detail ? `Seguimiento — ${detail.nombre}` : ""} wide
+        footer={<Btn variant="outline" onClick={()=>setDetailId(null)} disabled={busy}>Cerrar</Btn>}>
+        {detail && (
+          <div style={{ display:"grid", gap:16 }}>
+            <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "repeat(4,1fr)", gap:10 }}>
+              <div style={{ background:C.subtle, borderRadius:12, padding:12 }}>
+                <div style={{ fontSize:11, color:C.muted, fontWeight:700 }}>TOTAL</div>
+                <div style={{ fontSize:20, fontWeight:800 }}>{fmt(detail.precio)}</div>
+              </div>
+              <div style={{ background:"#ECFDF5", borderRadius:12, padding:12 }}>
+                <div style={{ fontSize:11, color:"#047857", fontWeight:700 }}>PAGADO</div>
+                <div style={{ fontSize:20, fontWeight:800, color:"#047857" }}>{fmt(detail.montoPagado || 0)}</div>
+              </div>
+              <div style={{ background: bonoSaldoDebe(detail) > 0 ? "#FFFBEB" : C.subtle, borderRadius:12, padding:12 }}>
+                <div style={{ fontSize:11, color: bonoSaldoDebe(detail) > 0 ? "#B45309" : C.muted, fontWeight:700 }}>DEBE</div>
+                <div style={{ fontSize:20, fontWeight:800, color: bonoSaldoDebe(detail) > 0 ? "#B45309" : C.text }}>{fmt(bonoSaldoDebe(detail))}</div>
+              </div>
+              <div style={{ background:C.violetLight, borderRadius:12, padding:12 }}>
+                <div style={{ fontSize:11, color:C.violet, fontWeight:700 }}>SESIONES</div>
+                <div style={{ fontSize:20, fontWeight:800, color:C.violet }}>{detail.sesionesUsadas}/{detail.sesionesTotal}</div>
+                <div style={{ fontSize:11, color:C.muted }}>Quedan {bonoSesionesRestantes(detail)} · {fmt(bonoPrecioPorSesion(detail))}/sesión ref.</div>
+              </div>
+            </div>
+            <div style={{ fontSize:13 }}>
+              <strong>{pacNombre(detail.pacienteId)}</strong>
+              {svcNombre(detail.servicioId) !== "—" && <span style={{ color:C.muted }}> · {svcNombre(detail.servicioId)}</span>}
+              {detail.vence && <span style={{ color:C.muted }}> · Vence {fmtDate(detail.vence)}</span>}
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap:14 }}>
+              <div style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:14, opacity: puedeGestionar ? 1 : 0.55 }}>
+                <div style={{ fontSize:13, fontWeight:800, marginBottom:10 }}>Registrar abono</div>
+                {!puedeGestionar && <p style={{ fontSize:11, color:C.muted, marginBottom:8 }}>Solo recepción, encargado/a o gerente.</p>}
+                <div style={{ display:"grid", gap:8 }}>
+                  <FG label="Monto (€) — puede ser 0">
+                    <input type="number" min={0} style={inp} value={pagoForm.monto} onChange={e=>setPagoForm(f=>({...f,monto:e.target.value}))} placeholder="50" disabled={!puedeGestionar}/>
+                  </FG>
+                  <FG label="Método">
+                    <select style={inp} value={pagoForm.metodoPago} onChange={e=>setPagoForm(f=>({...f,metodoPago:e.target.value}))} disabled={!puedeGestionar}>
+                      <option value="efectivo">Efectivo</option>
+                      <option value="tarjeta">Tarjeta</option>
+                      <option value="transferencia">Transferencia</option>
+                    </select>
+                  </FG>
+                  <FG label="Notas">
+                    <input style={inp} value={pagoForm.notas} onChange={e=>setPagoForm(f=>({...f,notas:e.target.value}))} placeholder="Opcional" disabled={!puedeGestionar}/>
+                  </FG>
+                  <Btn sm onClick={()=>void registrarPago()} disabled={!puedeGestionar || busy || pagoForm.monto === ""}>Registrar abono</Btn>
+                </div>
+              </div>
+              <div style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:14, opacity: puedeGestionar ? 1 : 0.55 }}>
+                <div style={{ fontSize:13, fontWeight:800, marginBottom:10 }}>Marcar sesión (recepción)</div>
+                {!puedeGestionar && <p style={{ fontSize:11, color:C.muted, marginBottom:8 }}>Solo recepción, encargado/a o gerente.</p>}
+                <div style={{ display:"grid", gap:8 }}>
+                  <FG label="Abono en esta visita (€) — puede ser 0">
+                    <input type="number" min={0} style={inp} value={sesionForm.cobroMonto} onChange={e=>setSesionForm(f=>({...f,cobroMonto:e.target.value}))} placeholder="0 si no abona hoy" disabled={!puedeGestionar}/>
+                  </FG>
+                  <FG label="Método (si cobra)">
+                    <select style={inp} value={sesionForm.metodoPago} onChange={e=>setSesionForm(f=>({...f,metodoPago:e.target.value}))} disabled={!puedeGestionar}>
+                      <option value="efectivo">Efectivo</option>
+                      <option value="tarjeta">Tarjeta</option>
+                      <option value="transferencia">Transferencia</option>
+                    </select>
+                  </FG>
+                  <FG label="Notas">
+                    <input style={inp} value={sesionForm.notas} onChange={e=>setSesionForm(f=>({...f,notas:e.target.value}))} placeholder="Opcional" disabled={!puedeGestionar}/>
+                  </FG>
+                  <Btn sm onClick={()=>void consumirSesion()} disabled={!puedeGestionar || busy || bonoSesionesRestantes(detail) <= 0}>
+                    Marcar sesión {detail.sesionesUsadas + 1}/{detail.sesionesTotal}
+                  </Btn>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap:14 }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:800, marginBottom:8 }}>Historial de pagos</div>
+                {pagosDetail.length === 0 ? (
+                  <div style={{ fontSize:12, color:C.muted }}>Sin abonos registrados.</div>
+                ) : (
+                  <div style={{ maxHeight:200, overflowY:"auto", border:`1px solid ${C.border}`, borderRadius:10 }}>
+                    {pagosDetail.map(p => (
+                      <div key={p.id} style={{ padding:"8px 12px", borderBottom:`1px solid ${C.subtle}`, fontSize:12, display:"flex", justifyContent:"space-between", gap:8 }}>
+                        <span>{fmtDate(p.fecha)} · {p.metodoPago}{p.notas ? ` · ${p.notas}` : ""}</span>
+                        <strong style={{ color:"#047857" }}>{fmt(p.monto)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize:13, fontWeight:800, marginBottom:8 }}>Historial de sesiones</div>
+                {sesionesDetail.length === 0 ? (
+                  <div style={{ fontSize:12, color:C.muted }}>Aún no se consumió ninguna sesión.</div>
+                ) : (
+                  <div style={{ maxHeight:200, overflowY:"auto", border:`1px solid ${C.border}`, borderRadius:10 }}>
+                    {sesionesDetail.map(s => (
+                      <div key={s.id} style={{ padding:"8px 12px", borderBottom:`1px solid ${C.subtle}`, fontSize:12, display:"flex", justifyContent:"space-between", gap:8 }}>
+                        <span>Sesión {s.numeroSesion} · {fmtDate(s.fecha)}{s.turnoId ? ` · turno #${s.turnoId}` : ""}{s.notas ? ` · ${s.notas}` : ""}</span>
+                        <strong>{s.cobroMonto > 0 ? fmt(s.cobroMonto) : "Sin cobro"}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <div style={{ background:C.card, borderRadius:16, padding:22, marginBottom:18, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-        <h3 style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>Packs activos — Clínica {clinic}</h3>
+        <h3 style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>Packs — Clínica {clinic}</h3>
         <div style={{ overflowX:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 680 : undefined }}>
-            <THead cols={["Paciente","Pack / servicio","Progreso","Vence","Acción"]}/>
+          <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 820 : undefined }}>
+            <THead cols={["Paciente","Pack","Sesiones","Finanzas","Vence","Acción"]}/>
             <tbody>
+              {packs.length === 0 && (
+                <tr><td colSpan={6} style={{ padding:24, textAlign:"center", color:"#94A3B8", fontSize:13 }}>Sin bonos en esta clínica.</td></tr>
+              )}
               {packs.map(b => {
-                const rest = b.sesionesTotal - b.sesionesUsadas
+                const rest = bonoSesionesRestantes(b)
+                const debe = bonoSaldoDebe(b)
                 return (
                   <tr key={b.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
                     <td style={{ padding:"11px 14px", fontWeight:600 }}>{pacNombre(b.pacienteId)}</td>
-                    <td style={{ padding:"11px 14px", fontSize:13 }}>{b.nombre}<div style={{ fontSize:11, color:C.muted }}>{svcNombre(b.servicioId)}</div></td>
-                    <td style={{ padding:"11px 14px" }}><Badge type={rest<=2?"pendiente":"confirmado"}>{b.sesionesUsadas}/{b.sesionesTotal} · quedan {rest}</Badge></td>
-                    <td style={{ padding:"11px 14px", fontSize:12 }}>{fmtDate(b.vence)}</td>
+                    <td style={{ padding:"11px 14px", fontSize:13 }}>
+                      {b.nombre}
+                      <div style={{ fontSize:11, color:C.muted }}>{svcNombre(b.servicioId)}</div>
+                    </td>
                     <td style={{ padding:"11px 14px" }}>
-                      <Btn sm variant="outline" disabled={rest<=0} onClick={()=>usarSesion(b.id)}>Usar 1 sesión</Btn>
+                      <Badge type={rest<=2 && rest>0 ? "pendiente" : rest<=0 ? "cancelado" : "confirmado"}>
+                        {b.sesionesUsadas}/{b.sesionesTotal} · quedan {rest}
+                      </Badge>
+                    </td>
+                    <td style={{ padding:"11px 14px", fontSize:12 }}>
+                      <div>Total {fmt(b.precio)}</div>
+                      <div style={{ color:"#047857" }}>Pagado {fmt(b.montoPagado || 0)}</div>
+                      <div style={{ color: debe > 0 ? "#B45309" : C.muted, fontWeight: debe > 0 ? 700 : 400 }}>Debe {fmt(debe)}</div>
+                    </td>
+                    <td style={{ padding:"11px 14px", fontSize:12 }}>
+                      {fmtDate(b.vence)}
+                      {b.vence && (() => {
+                        const dias = Math.ceil((new Date(b.vence) - new Date(TODAY)) / 86400000)
+                        if (dias < 0) return <span style={{ display:"block", fontSize:10, fontWeight:700, color:"#991B1B" }}>Vencido</span>
+                        if (dias <= 15) return <span style={{ display:"block", fontSize:10, fontWeight:700, color: dias <= 3 ? "#DC2626" : "#D97706" }}>{dias}d</span>
+                        return null
+                      })()}
+                    </td>
+                    <td style={{ padding:"11px 14px" }}>
+                      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                        <Btn sm onClick={()=>{ setDetailId(b.id); setPagoForm({ monto:"", metodoPago:"efectivo", notas:"" }); setSesionForm({ cobroMonto:"", metodoPago:"efectivo", notas:"" }) }}>Seguimiento</Btn>
+                        {puedeEliminar && <Btn sm variant="danger" onClick={()=>deleteBono(b.id)} title="Eliminar bono"><Trash2 size={11}/></Btn>}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -6582,6 +8294,111 @@ async function procesarCobroConOpenAI(texto, servicios) {
   const content = payload.choices?.[0]?.message?.content
   if (!content) throw new Error("Respuesta vacía del modelo")
   return JSON.parse(content)
+}
+
+const DENOMINACIONES_EUR = [
+  { key: "500", label: "500 €", grupo: "billetes" },
+  { key: "200", label: "200 €", grupo: "billetes" },
+  { key: "100", label: "100 €", grupo: "billetes" },
+  { key: "50", label: "50 €", grupo: "billetes" },
+  { key: "20", label: "20 €", grupo: "billetes" },
+  { key: "10", label: "10 €", grupo: "billetes" },
+  { key: "5", label: "5 €", grupo: "billetes" },
+  { key: "2", label: "2 €", grupo: "monedas" },
+  { key: "1", label: "1 €", grupo: "monedas" },
+  { key: "0.5", label: "0,50 €", grupo: "monedas" },
+  { key: "0.2", label: "0,20 €", grupo: "monedas" },
+  { key: "0.1", label: "0,10 €", grupo: "monedas" },
+  { key: "0.05", label: "0,05 €", grupo: "monedas" },
+  { key: "0.02", label: "0,02 €", grupo: "monedas" },
+  { key: "0.01", label: "0,01 €", grupo: "monedas" },
+]
+
+function emptyConteoEur() {
+  return Object.fromEntries(DENOMINACIONES_EUR.map(d => [d.key, 0]))
+}
+
+function sumConteoEur(conteo) {
+  if (!conteo || typeof conteo !== "object") return 0
+  return DENOMINACIONES_EUR.reduce((acc, d) => {
+    const qty = Math.max(0, parseInt(conteo[d.key], 10) || 0)
+    return acc + qty * parseFloat(d.key)
+  }, 0)
+}
+
+function mapCajaSesionRow(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    clinicId: r.clinic_id,
+    fecha: r.fecha,
+    estado: r.estado || "abierta",
+    aperturaAt: r.apertura_at,
+    cierreAt: r.cierre_at,
+    fondoInicial: +r.fondo_inicial || 0,
+    conteoApertura: r.conteo_apertura && typeof r.conteo_apertura === "object" ? r.conteo_apertura : {},
+    conteoCierreEfectivo: r.conteo_cierre_efectivo && typeof r.conteo_cierre_efectivo === "object" ? r.conteo_cierre_efectivo : {},
+    cierreTarjeta: r.cierre_tarjeta == null ? null : +r.cierre_tarjeta,
+    cierreTransferencia: r.cierre_transferencia == null ? null : +r.cierre_transferencia,
+    cierreBanco: r.cierre_banco == null ? null : +r.cierre_banco,
+    teoricoEfectivo: r.teorico_efectivo == null ? null : +r.teorico_efectivo,
+    teoricoTarjeta: r.teorico_tarjeta == null ? null : +r.teorico_tarjeta,
+    teoricoTransferencia: r.teorico_transferencia == null ? null : +r.teorico_transferencia,
+    diferenciaEfectivo: r.diferencia_efectivo == null ? null : +r.diferencia_efectivo,
+    diferenciaTarjeta: r.diferencia_tarjeta == null ? null : +r.diferencia_tarjeta,
+    diferenciaTransferencia: r.diferencia_transferencia == null ? null : +r.diferencia_transferencia,
+    notasCierre: r.notas_cierre || "",
+  }
+}
+
+function ConteoEfectivoPanel({ conteo, onChange, compact }) {
+  const setQty = (key, raw) => {
+    const n = Math.max(0, parseInt(raw, 10) || 0)
+    onChange({ ...(conteo || emptyConteoEur()), [key]: n })
+  }
+  const base = conteo || emptyConteoEur()
+  const total = sumConteoEur(base)
+  const renderGroup = (grupo, titulo) => (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>{titulo}</div>
+      <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "repeat(2, 1fr)", gap: 8 }}>
+        {DENOMINACIONES_EUR.filter(d => d.grupo === grupo).map(d => {
+          const qty = Math.max(0, parseInt(base[d.key], 10) || 0)
+          const sub = qty * parseFloat(d.key)
+          return (
+            <div key={d.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: C.subtle, borderRadius: 10, border: `1px solid ${C.border}` }}>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 700, minWidth: 52 }}>{d.label}</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={qty || ""}
+                placeholder="0"
+                onChange={e => setQty(d.key, e.target.value)}
+                style={{ ...inp, width: 64, padding: "6px 8px", textAlign: "center" }}
+              />
+              <span style={{ fontSize: 12, color: C.muted, minWidth: 64, textAlign: "right" }}>{fmt(sub)}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+  return (
+    <div>
+      {renderGroup("billetes", "Billetes")}
+      {renderGroup("monedas", "Monedas")}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: C.violetLight, borderRadius: 12, border: `1px solid ${C.violet}33` }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.violet }}>Total contado</span>
+        <span style={{ fontSize: 20, fontWeight: 800, color: C.violet }}>{fmt(total)}</span>
+      </div>
+    </div>
+  )
+}
+
+function diffColor(v) {
+  if (v == null || Math.abs(v) < 0.005) return C.success
+  return C.danger
 }
 
 /** Dictado del especialista → rellenar evaluación, servicio, protocolo, notas, insumos y anamnesis (proxy /api/openai/doctor-session). */
@@ -6683,8 +8500,25 @@ async function procesarResultadoDesdeAudio(audioBase64, mimeType, protocoloSnipp
   return JSON.parse(rawText)
 }
 
+/** Foto de insumo usado → identificación, cantidad, lote (visión /api/openai/insumo-foto). */
+async function procesarInsumoFotoConOpenAI(imageBase64, stockItems, servicios, protocolo) {
+  const res = await fetch("/api/openai/insumo-foto", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      imageBase64,
+      stock: (stockItems || []).map(s => ({ id: s.id, nombre: s.nombre, unidad: s.unidad || "" })),
+      servicios: (servicios || []).map(s => ({ id: s.id, nombre: s.nombre })),
+      protocolo: String(protocolo || "").trim(),
+    }),
+  })
+  const j = await res.json().catch(() => ({}))
+  if (!res.ok || !j?.ok) throw new Error(j?.error || `Error HTTP ${res.status}`)
+  return j
+}
+
 // ─── SECTION: TPV VIRTUAL ───────────────────────────────────────
-function PuntoVenta({ data, setData, clinic }) {
+function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
   const narrow = useMediaQuery("(max-width: 900px)")
   const lineIdRef = useRef(0)
   const [carrito, setCarrito] = useState([])
@@ -6692,28 +8526,83 @@ function PuntoVenta({ data, setData, clinic }) {
   const [detalleManual, setDetalleManual] = useState("")
   const [metodo, setMetodo] = useState("efectivo")
   const [comprobanteExtra, setComprobanteExtra] = useState("")
-  const [tab, setTab] = useState("caja")
+  const [tab, setTab] = useState("cobrar")
   const [iaTexto, setIaTexto] = useState("")
   const [iaLoading, setIaLoading] = useState(false)
   const [iaError, setIaError] = useState("")
   const [escuchando, setEscuchando] = useState(false)
   const dictadoAccRef = useRef("")
+  const [openApertura, setOpenApertura] = useState(false)
+  const [openCierre, setOpenCierre] = useState(false)
+  const [conteoApertura, setConteoApertura] = useState(() => emptyConteoEur())
+  const [conteoCierre, setConteoCierre] = useState(() => emptyConteoEur())
+  const [cierreTarjeta, setCierreTarjeta] = useState("")
+  const [cierreTransferencia, setCierreTransferencia] = useState("")
+  const [cierreBanco, setCierreBanco] = useState("")
+  const [notasCierre, setNotasCierre] = useState("")
+  const [cajaBusy, setCajaBusy] = useState(false)
+  const [salidaDisplay, setSalidaDisplay] = useState("")
+  const [salidaMetodo, setSalidaMetodo] = useState("efectivo")
+  const [salidaForm, setSalidaForm] = useState({ concepto: "", catSalida: "gastos_operativos", notas: "", comprobante: "" })
+  const [salidaBusy, setSalidaBusy] = useState(false)
 
   const movs = (data.tpv?.movimientos || []).filter(m => m.clinicId === clinic).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id)
-  const cierre = (data.tpv?.cierres || []).find(c => c.fecha === TODAY && c.clinicId === clinic)
+  const sesiones = (data.tpv?.sesiones || []).filter(s => s.clinicId === clinic)
+  const sesionAbierta = sesiones.find(s => s.estado === "abierta") || null
+  const ultimoCierre = sesiones.find(s => s.estado === "cerrada") || null
   const hoyMovs = movs.filter(m => m.fecha === TODAY)
+
+  const sumMovs = (list, metodo) => list.filter(m => !metodo || m.metodo === metodo).reduce((a, m) => a + m.monto, 0)
+
+  const resumenIngresosHoy = useMemo(() => {
+    const ing = hoyMovs.filter(m => (m.tipo || "ingreso") === "ingreso")
+    return {
+      efectivo: sumMovs(ing, "efectivo"),
+      tarjeta: sumMovs(ing, "tarjeta"),
+      transferencia: sumMovs(ing, "transferencia"),
+      total: sumMovs(ing),
+    }
+  }, [hoyMovs])
+
+  const resumenSalidasHoy = useMemo(() => {
+    const sal = hoyMovs.filter(m => m.tipo === "salida")
+    return {
+      efectivo: sumMovs(sal, "efectivo"),
+      tarjeta: sumMovs(sal, "tarjeta"),
+      transferencia: sumMovs(sal, "transferencia"),
+      total: sumMovs(sal),
+    }
+  }, [hoyMovs])
+
+  const hoyIngresos = hoyMovs.filter(m => (m.tipo || "ingreso") === "ingreso")
+  const hoySalidas = hoyMovs.filter(m => m.tipo === "salida")
+
+  const resumenHoy = useMemo(() => ({
+    efectivo: resumenIngresosHoy.efectivo - resumenSalidasHoy.efectivo,
+    tarjeta: resumenIngresosHoy.tarjeta - resumenSalidasHoy.tarjeta,
+    transferencia: resumenIngresosHoy.transferencia - resumenSalidasHoy.transferencia,
+    total: resumenIngresosHoy.total - resumenSalidasHoy.total,
+    ingresos: resumenIngresosHoy,
+    salidas: resumenSalidasHoy,
+  }), [resumenIngresosHoy, resumenSalidasHoy])
 
   const totalCarrito = useMemo(
     () => carrito.reduce((a, x) => a + x.montoUnit * x.cantidad, 0),
     [carrito],
   )
 
-  const resumenHoy = useMemo(() => ({
-    efectivo: hoyMovs.filter(m => m.metodo === "efectivo").reduce((a, m) => a + m.monto, 0),
-    tarjeta: hoyMovs.filter(m => m.metodo === "tarjeta").reduce((a, m) => a + m.monto, 0),
-    transferencia: hoyMovs.filter(m => m.metodo === "transferencia").reduce((a, m) => a + m.monto, 0),
-    total: hoyMovs.reduce((a, m) => a + m.monto, 0),
-  }), [hoyMovs])
+  const teoricoCierre = useMemo(() => {
+    const fondo = sesionAbierta?.fondoInicial || 0
+    return {
+      efectivo: fondo + resumenHoy.efectivo,
+      tarjeta: resumenHoy.tarjeta,
+      transferencia: resumenHoy.transferencia,
+      total: fondo + resumenHoy.total,
+    }
+  }, [sesionAbierta, resumenHoy])
+
+  const contadoCierreEfectivo = useMemo(() => sumConteoEur(conteoCierre), [conteoCierre])
+  const contadoApertura = useMemo(() => sumConteoEur(conteoApertura), [conteoApertura])
 
   const appendDigit = ch => {
     setDisplay(prev => {
@@ -6723,9 +8612,19 @@ function PuntoVenta({ data, setData, clinic }) {
       return prev + ch
     })
   }
+  const appendSalidaDigit = ch => {
+    setSalidaDisplay(prev => {
+      if (ch === "." && prev.includes(".")) return prev
+      if (prev === "0" && ch !== ".") return ch
+      if (!prev && ch === ".") return "0."
+      return prev + ch
+    })
+  }
 
   const keypadClear = () => { setDisplay("") }
   const keypadBack = () => { setDisplay(prev => prev.slice(0, -1)) }
+  const salidaKeypadClear = () => { setSalidaDisplay("") }
+  const salidaKeypadBack = () => { setSalidaDisplay(prev => prev.slice(0, -1)) }
 
   const addLineManual = () => {
     const v = parseFloat(display.replace(",", "."))
@@ -6754,6 +8653,11 @@ function PuntoVenta({ data, setData, clinic }) {
 
   const registrarCobro = async () => {
     if (totalCarrito <= 0) return
+    if (!sesionAbierta) {
+      alert("La caja está cerrada. Abrí la caja en la pestaña «Apertura / Cierre» antes de cobrar.")
+      setTab("cajadiaria")
+      return
+    }
     const concepto = carrito.length === 1
       ? `${carrito[0].nombre}${carrito[0].cantidad > 1 ? ` ×${carrito[0].cantidad}` : ""}`
       : `Ticket (${carrito.length} ítems): ` + carrito.map(x => `${x.nombre}×${x.cantidad}`).join(" · ")
@@ -6766,6 +8670,7 @@ function PuntoVenta({ data, setData, clinic }) {
         monto: totalCarrito,
         concepto,
         comprobante: comp,
+        tipo: "ingreso",
       })
       await supabase.from("clinic_movimientos").insert({
         clinic_id: clinic,
@@ -6786,6 +8691,7 @@ function PuntoVenta({ data, setData, clinic }) {
         monto: totalCarrito,
         concepto,
         comprobante: comp,
+        tipo: "ingreso",
       }
       const cm = d.clinics[clinic].movimientos
       const mid = cm.length ? Math.max(...cm.map(m => m.id)) + 1 : 1
@@ -6805,17 +8711,218 @@ function PuntoVenta({ data, setData, clinic }) {
     setComprobanteExtra("")
   }
 
-  const cerrarCaja = () => {
+  const registrarSalida = async () => {
+    const monto = parseFloat(String(salidaDisplay).replace(",", "."))
+    if (!monto || monto <= 0) {
+      alert("Indicá un importe válido para la salida.")
+      return
+    }
+    if (!String(salidaForm.concepto || "").trim()) {
+      alert("Escribí para qué es la salida (concepto / motivo).")
+      return
+    }
+    if (!sesionAbierta) {
+      alert("La caja está cerrada. Abrí la caja en «Apertura / Cierre» antes de registrar salidas.")
+      setTab("cajadiaria")
+      return
+    }
+    const catSalida = salidaForm.catSalida || "otros"
+    const tipoRow = TPV_SALIDA_TIPOS.find(t => t.id === catSalida)
+    const catContable = tipoRow?.catContable || "otros"
+    const etiquetaTipo = tpvSalidaTipoLabel[catSalida] || catSalida
+    const concepto = `[Salida · ${etiquetaTipo}] ${String(salidaForm.concepto).trim()}`
+    const notas = String(salidaForm.notas || "").trim()
+    const comp = String(salidaForm.comprobante || "").trim() || `SAL-${Date.now()}`
+    if (!window.confirm(`¿Registrar salida de ${fmt(monto)} (${etiquetaTipo})?\n${String(salidaForm.concepto).trim()}`)) return
+    setSalidaBusy(true)
+    try {
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { error: eTpv } = await supabase.from("tpv_movimientos").insert({
+          fecha: TODAY,
+          clinic_id: clinic,
+          metodo: salidaMetodo,
+          monto,
+          concepto,
+          comprobante: comp,
+          tipo: "salida",
+          cat_salida: catSalida,
+          notas,
+        })
+        if (eTpv) {
+          alert(eTpv.message || "No se pudo registrar la salida en TPV.")
+          return
+        }
+        await supabase.from("clinic_movimientos").insert({
+          clinic_id: clinic,
+          tipo: "egreso",
+          fecha: TODAY,
+          concepto,
+          cat: catContable,
+          monto,
+        })
+      }
+      setData(d => {
+        const tid = d.tpv?.movimientos?.length ? Math.max(...d.tpv.movimientos.map(x => x.id)) + 1 : 1
+        const row = {
+          id: tid,
+          fecha: TODAY,
+          clinicId: clinic,
+          metodo: salidaMetodo,
+          monto,
+          concepto,
+          comprobante: comp,
+          tipo: "salida",
+          catSalida,
+          notas,
+        }
+        const cm = d.clinics[clinic].movimientos
+        const mid = cm.length ? Math.max(...cm.map(m => m.id)) + 1 : 1
+        return {
+          ...d,
+          tpv: { ...d.tpv, movimientos: [...(d.tpv?.movimientos || []), row] },
+          clinics: {
+            ...d.clinics,
+            [clinic]: {
+              ...d.clinics[clinic],
+              movimientos: [...cm, { id: mid, tipo: "egreso", fecha: TODAY, concepto, cat: catContable, monto }],
+            },
+          },
+        }
+      })
+      setSalidaDisplay("")
+      setSalidaForm(f => ({ ...f, concepto: "", notas: "", comprobante: "" }))
+      await onPersist?.()
+    } finally {
+      setSalidaBusy(false)
+    }
+  }
+
+  const patchSesiones = updater => {
     setData(d => ({
       ...d,
       tpv: {
         ...d.tpv,
-        cierres: [
-          ...(d.tpv?.cierres || []).filter(c => !(c.fecha === TODAY && c.clinicId === clinic)),
-          { fecha: TODAY, clinicId: clinic, efectivo: resumenHoy.efectivo, tarjeta: resumenHoy.tarjeta, transferencia: resumenHoy.transferencia },
-        ],
+        sesiones: updater(d.tpv?.sesiones || []),
       },
     }))
+  }
+
+  const abrirCaja = async () => {
+    const fondo = contadoApertura
+    setCajaBusy(true)
+    try {
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { data: ins, error } = await supabase
+          .from("tpv_caja_sesiones")
+          .insert({
+            clinic_id: clinic,
+            fecha: TODAY,
+            estado: "abierta",
+            fondo_inicial: fondo,
+            conteo_apertura: conteoApertura,
+            abierto_por_empleado_id: empleadoId || null,
+          })
+          .select("*")
+          .single()
+        if (error) {
+          alert(error.message || "No se pudo abrir la caja.")
+          return
+        }
+        const mapped = mapCajaSesionRow(ins)
+        patchSesiones(list => [...list.filter(s => !(s.clinicId === clinic && s.estado === "abierta")), mapped])
+        await onPersist?.()
+      } else {
+        const id = sesiones.length ? Math.max(...sesiones.map(s => s.id || 0)) + 1 : 1
+        patchSesiones(list => [...list.filter(s => !(s.clinicId === clinic && s.estado === "abierta")), {
+          id, clinicId: clinic, fecha: TODAY, estado: "abierta", fondoInicial: fondo, conteoApertura: { ...conteoApertura },
+        }])
+      }
+      setOpenApertura(false)
+      setConteoApertura(emptyConteoEur())
+    } finally {
+      setCajaBusy(false)
+    }
+  }
+
+  const cerrarCaja = async () => {
+    if (!sesionAbierta) return
+    const tarjeta = parseFloat(String(cierreTarjeta).replace(",", ".")) || 0
+    const transferencia = parseFloat(String(cierreTransferencia).replace(",", ".")) || 0
+    const banco = parseFloat(String(cierreBanco).replace(",", ".")) || 0
+    const te = teoricoCierre
+    const diffEf = contadoCierreEfectivo - te.efectivo
+    const diffTar = tarjeta - te.tarjeta
+    const diffTrans = transferencia - te.transferencia
+    if (!window.confirm("¿Confirmar cierre de caja con los importes contados?")) return
+    setCajaBusy(true)
+    try {
+      const payload = {
+        estado: "cerrada",
+        cierre_at: new Date().toISOString(),
+        conteo_cierre_efectivo: conteoCierre,
+        cierre_tarjeta: tarjeta,
+        cierre_transferencia: transferencia,
+        cierre_banco: banco,
+        teorico_efectivo: te.efectivo,
+        teorico_tarjeta: te.tarjeta,
+        teorico_transferencia: te.transferencia,
+        diferencia_efectivo: diffEf,
+        diferencia_tarjeta: diffTar,
+        diferencia_transferencia: diffTrans,
+        notas_cierre: String(notasCierre || "").trim(),
+        cerrado_por_empleado_id: empleadoId || null,
+      }
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const { data: upd, error } = await supabase
+          .from("tpv_caja_sesiones")
+          .update(payload)
+          .eq("id", sesionAbierta.id)
+          .select("*")
+          .single()
+        if (error) {
+          alert(error.message || "No se pudo cerrar la caja.")
+          return
+        }
+        const mapped = mapCajaSesionRow(upd)
+        patchSesiones(list => list.map(s => (s.id === sesionAbierta.id ? mapped : s)))
+        await onPersist?.()
+      } else {
+        patchSesiones(list => list.map(s => s.id === sesionAbierta.id ? {
+          ...s,
+          ...payload,
+          estado: "cerrada",
+          fondoInicial: s.fondoInicial,
+          conteoCierreEfectivo: conteoCierre,
+          cierreTarjeta: tarjeta,
+          cierreTransferencia: transferencia,
+          cierreBanco: banco,
+          teoricoEfectivo: te.efectivo,
+          teoricoTarjeta: te.tarjeta,
+          teoricoTransferencia: te.transferencia,
+          diferenciaEfectivo: diffEf,
+          diferenciaTarjeta: diffTar,
+          diferenciaTransferencia: diffTrans,
+          notasCierre: notasCierre,
+        } : s))
+      }
+      setOpenCierre(false)
+      setConteoCierre(emptyConteoEur())
+      setCierreTarjeta("")
+      setCierreTransferencia("")
+      setCierreBanco("")
+      setNotasCierre("")
+    } finally {
+      setCajaBusy(false)
+    }
+  }
+
+  const iniciarCierre = () => {
+    setConteoCierre(emptyConteoEur())
+    setCierreTarjeta(String(teoricoCierre.tarjeta || ""))
+    setCierreTransferencia(String(teoricoCierre.transferencia || ""))
+    setCierreBanco("")
+    setNotasCierre("")
+    setOpenCierre(true)
   }
 
   const aplicarIAConTexto = async textoRaw => {
@@ -6920,13 +9027,48 @@ function PuntoVenta({ data, setData, clinic }) {
             Terminal táctil: armá el ticket con servicios rápidos o teclado, elegí medio de pago y cobrá. Sincroniza con contabilidad de la clínica {clinic}.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8, width: narrow ? "100%" : "auto" }}>
-          <Btn variant={tab === "caja" ? "primary" : "outline"} sm onClick={() => setTab("caja")} style={{ flex: narrow ? 1 : undefined, justifyContent:"center" }}>Caja</Btn>
+        <div style={{ display: "flex", gap: 8, width: narrow ? "100%" : "auto", flexWrap: "wrap" }}>
+          <Btn variant={tab === "cobrar" ? "primary" : "outline"} sm onClick={() => setTab("cobrar")} style={{ flex: narrow ? 1 : undefined, justifyContent:"center" }}>Cobrar</Btn>
+          <Btn variant={tab === "salidas" ? "primary" : "outline"} sm onClick={() => setTab("salidas")} style={{ flex: narrow ? 1 : undefined, justifyContent:"center", ...(tab === "salidas" ? {} : { borderColor: "#FCA5A5", color: "#B91C1C" }) }}>Salidas</Btn>
+          <Btn variant={tab === "cajadiaria" ? "primary" : "outline"} sm onClick={() => setTab("cajadiaria")} style={{ flex: narrow ? 1 : undefined, justifyContent:"center" }}>Apertura / Cierre</Btn>
           <Btn variant={tab === "historial" ? "primary" : "outline"} sm onClick={() => setTab("historial")} style={{ flex: narrow ? 1 : undefined, justifyContent:"center" }}>Movimientos</Btn>
         </div>
       </div>
 
-      {tab === "caja" && (
+      <div style={{
+        marginBottom: 16,
+        padding: "12px 16px",
+        borderRadius: 14,
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        background: sesionAbierta ? "linear-gradient(135deg,#ECFDF5,#D1FAE5)" : "linear-gradient(135deg,#FEF2F2,#FECACA)",
+        border: sesionAbierta ? "1px solid #6EE7B7" : "1px solid #FCA5A5",
+      }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: sesionAbierta ? "#065F46" : "#991B1B" }}>
+            {sesionAbierta ? "● Caja ABIERTA" : "● Caja CERRADA"}
+          </div>
+          <div style={{ fontSize: 12, color: sesionAbierta ? "#047857" : "#B91C1C", marginTop: 4 }}>
+            {sesionAbierta
+              ? `Fondo ${fmt(sesionAbierta.fondoInicial)} · Ingresos ${fmt(resumenHoy.ingresos.total)} · Salidas ${fmt(resumenHoy.salidas.total)} · Efectivo en caja ${fmt(teoricoCierre.efectivo)}`
+              : ultimoCierre
+                ? `Último cierre ${fmtDate(ultimoCierre.fecha)} · Dif. efectivo ${fmt(ultimoCierre.diferenciaEfectivo || 0)}`
+                : "Abrí la caja para registrar cobros del día."}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {!sesionAbierta ? (
+            <Btn sm onClick={() => { setConteoApertura(emptyConteoEur()); setOpenApertura(true) }}><Lock size={14}/> Abrir caja</Btn>
+          ) : (
+            <Btn sm variant="outline" onClick={() => setTab("cajadiaria")} style={{ borderColor: "#059669", color: "#059669" }}><DollarSign size={14}/> Ir a cierre</Btn>
+          )}
+        </div>
+      </div>
+
+      {tab === "cobrar" && (
         <div style={{
           marginBottom: 18,
           padding: narrow ? 14 : 18,
@@ -6976,7 +9118,7 @@ function PuntoVenta({ data, setData, clinic }) {
         </div>
       )}
 
-      {tab === "caja" && (
+      {tab === "cobrar" && (
         <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 380px", gap: 18, alignItems: "start" }}>
           {/* Terminal oscuro */}
           <div style={{
@@ -6988,7 +9130,7 @@ function PuntoVenta({ data, setData, clinic }) {
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".12em", color: "#64748b", textTransform: "uppercase" }}>Estética ERP · C{clinic}</span>
-              <span style={{ fontSize: 11, color: "#22c55e", fontWeight: 700 }}>● En línea</span>
+              <span style={{ fontSize: 11, color: sesionAbierta ? "#22c55e" : "#f87171", fontWeight: 700 }}>{sesionAbierta ? "● Caja abierta" : "● Caja cerrada"}</span>
             </div>
 
             <div style={{
@@ -7046,7 +9188,7 @@ function PuntoVenta({ data, setData, clinic }) {
 
             <Btn
               onClick={() => void registrarCobro()}
-              disabled={totalCarrito <= 0}
+              disabled={totalCarrito <= 0 || !sesionAbierta}
               style={{
                 width: "100%",
                 minHeight: 52,
@@ -7202,16 +9344,282 @@ function PuntoVenta({ data, setData, clinic }) {
             </div>
 
             <div style={{ background: C.violetLight, borderRadius: 14, padding: 14, border: `1px solid ${C.violet}33` }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: C.violet, marginBottom: 8 }}>Resumen de hoy (TPV)</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: C.violet, marginBottom: 8 }}>Ventas de hoy (TPV)</div>
               <div style={{ fontSize: 13, color: C.text, display: "grid", gap: 4 }}>
-                <span>Efectivo: <strong>{fmt(resumenHoy.efectivo)}</strong></span>
-                <span>Tarjeta: <strong>{fmt(resumenHoy.tarjeta)}</strong></span>
-                <span>Transferencia: <strong>{fmt(resumenHoy.transferencia)}</strong></span>
-                <span style={{ marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.violet}33` }}>Total: <strong>{fmt(resumenHoy.total)}</strong></span>
+                <span>Ingresos efectivo: <strong style={{ color: "#059669" }}>{fmt(resumenHoy.ingresos.efectivo)}</strong></span>
+                <span>Salidas efectivo: <strong style={{ color: C.danger }}>−{fmt(resumenHoy.salidas.efectivo)}</strong></span>
+                <span>Tarjeta (neto): <strong>{fmt(resumenHoy.tarjeta)}</strong></span>
+                <span>Transferencia (neto): <strong>{fmt(resumenHoy.transferencia)}</strong></span>
+                <span style={{ marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.violet}33` }}>Balance neto hoy: <strong>{fmt(resumenHoy.total)}</strong></span>
+                {sesionAbierta && (
+                  <span style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Fondo {fmt(sesionAbierta.fondoInicial)} → caja efectivo {fmt(teoricoCierre.efectivo)}</span>
+                )}
               </div>
-              <Btn variant="outline" style={{ width: "100%", marginTop: 12 }} onClick={cerrarCaja}>
-                Registrar cierre de caja hoy
+              <Btn variant="outline" style={{ width: "100%", marginTop: 12 }} onClick={() => setTab("cajadiaria")}>
+                Apertura / cierre de caja
               </Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "cajadiaria" && (
+        <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18, alignItems: "start" }}>
+          <div style={{ background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+            <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>Estado de la caja</h3>
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+              Al <strong>abrir</strong>, contá billetes y monedas del fondo inicial. Al <strong>cerrar</strong>, contá el efectivo físico y cargá totales de datáfono, transferencias y banco para cuadrar con el sistema.
+            </p>
+            <div style={{ padding: 14, borderRadius: 12, background: sesionAbierta ? "#ECFDF5" : C.subtle, border: `1px solid ${sesionAbierta ? "#6EE7B7" : C.border}`, marginBottom: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: sesionAbierta ? "#065F46" : C.text }}>
+                {sesionAbierta ? "Sesión abierta" : "Sin sesión abierta"}
+              </div>
+              {sesionAbierta ? (
+                <div style={{ fontSize: 13, color: "#047857", marginTop: 8, display: "grid", gap: 4 }}>
+                  <span>Apertura: {sesionAbierta.aperturaAt ? new Date(sesionAbierta.aperturaAt).toLocaleString("es-ES") : fmtDate(sesionAbierta.fecha)}</span>
+                  <span>Fondo inicial: <strong>{fmt(sesionAbierta.fondoInicial)}</strong></span>
+                  <span>+ Ingresos efectivo: <strong>{fmt(resumenHoy.ingresos.efectivo)}</strong></span>
+                  <span>− Salidas efectivo: <strong style={{ color: C.danger }}>{fmt(resumenHoy.salidas.efectivo)}</strong></span>
+                  <span>Efectivo teórico en caja: <strong>{fmt(teoricoCierre.efectivo)}</strong></span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: C.muted, marginTop: 8 }}>Abrí la caja al comenzar el turno de recepción.</div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {!sesionAbierta ? (
+                <Btn onClick={() => { setConteoApertura(emptyConteoEur()); setOpenApertura(true) }} disabled={cajaBusy}>
+                  <Lock size={14}/> Abrir caja (conteo fondo)
+                </Btn>
+              ) : (
+                <Btn variant="danger" onClick={iniciarCierre} disabled={cajaBusy}>
+                  <DollarSign size={14}/> Cerrar caja (arqueo)
+                </Btn>
+              )}
+            </div>
+          </div>
+
+          <div style={{ background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+            <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Cuadre del día (sistema)</h3>
+            <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: C.subtle, borderRadius: 10 }}>
+                <span>Fondo inicial</span><strong>{fmt(sesionAbierta?.fondoInicial || 0)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: C.subtle, borderRadius: 10 }}>
+                <span>+ Cobros efectivo</span><strong style={{ color: "#059669" }}>{fmt(resumenHoy.ingresos.efectivo)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: "#FEF2F2", borderRadius: 10, border: "1px solid #FECACA" }}>
+                <span>− Salidas efectivo</span><strong style={{ color: C.danger }}>{fmt(resumenHoy.salidas.efectivo)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: "#ECFDF5", borderRadius: 10, border: "1px solid #A7F3D0" }}>
+                <span>Efectivo teórico</span><strong style={{ color: "#059669" }}>{fmt(teoricoCierre.efectivo)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: C.subtle, borderRadius: 10 }}>
+                <span>Tarjeta (TPV)</span><strong>{fmt(teoricoCierre.tarjeta)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: C.subtle, borderRadius: 10 }}>
+                <span>Transferencia / Bizum</span><strong>{fmt(teoricoCierre.transferencia)}</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: C.violetLight, borderRadius: 10, border: `1px solid ${C.violet}33` }}>
+                <span>Balance neto (ingresos − salidas)</span><strong>{fmt(resumenHoy.total)}</strong>
+              </div>
+            </div>
+          </div>
+
+          {sesiones.filter(s => s.estado === "cerrada").length > 0 && (
+            <div style={{ gridColumn: narrow ? "auto" : "1 / -1", background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}>Historial de cierres</h3>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+                  <THead cols={["Fecha", "Fondo", "Teórico ef.", "Contado ef.", "Dif. ef.", "Tarjeta", "Transf.", "Notas"]} />
+                  <tbody>
+                    {sesiones.filter(s => s.estado === "cerrada").slice(0, 15).map(s => (
+                      <tr key={s.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmtDate(s.fecha)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmt(s.fondoInicial)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmt(s.teoricoEfectivo)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmt(sumConteoEur(s.conteoCierreEfectivo))}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, fontWeight: 700, color: diffColor(s.diferenciaEfectivo) }}>{fmt(s.diferenciaEfectivo || 0)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmt(s.cierreTarjeta || 0)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmt(s.cierreTransferencia || 0)}</td>
+                        <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted, maxWidth: 180 }}>{s.notasCierre || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "salidas" && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: narrow ? "1fr" : "1fr 340px",
+          gap: 18,
+          alignItems: "start",
+        }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{
+              padding: "14px 16px",
+              borderRadius: 14,
+              background: "linear-gradient(135deg,#FEF2F2,#FECACA)",
+              border: "1px solid #FCA5A5",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <ArrowDownRight size={20} color={C.danger}/>
+                <span style={{ fontSize: 15, fontWeight: 800, color: "#991B1B" }}>Registrar salida de dinero</span>
+              </div>
+              <p style={{ fontSize: 12, color: "#7F1D1D", margin: 0, lineHeight: 1.45 }}>
+                Pagos, retiros, devoluciones y gastos que salen de caja. Se descuentan del arqueo y se registran como egreso en contabilidad.
+              </p>
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 16, padding: 18, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+              <FG label="Tipo de salida" full>
+                <select
+                  style={{ ...inp, fontSize: 16, minHeight: 48, background: "#fff" }}
+                  value={salidaForm.catSalida}
+                  onChange={e => setSalidaForm(f => ({ ...f, catSalida: e.target.value }))}
+                >
+                  {TPV_SALIDA_TIPOS.map(t => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+              </FG>
+              <FG label="Concepto / para qué es" full>
+                <textarea
+                  style={{ ...inp, minHeight: 72, fontSize: 16, background: "#fff" }}
+                  value={salidaForm.concepto}
+                  onChange={e => setSalidaForm(f => ({ ...f, concepto: e.target.value }))}
+                  placeholder="Ej: Compra material estéril, pago limpieza, devolución depósito paciente García…"
+                />
+              </FG>
+              <FG label="Medio de pago" full>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {metodos.map(m => {
+                    const Icon = m.icon
+                    const active = salidaMetodo === m.id
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setSalidaMetodo(m.id)}
+                        style={{
+                          flex: narrow ? "1 1 45%" : undefined,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "10px 14px",
+                          borderRadius: 12,
+                          border: active ? `2px solid ${m.color}` : `1px solid ${C.border}`,
+                          background: active ? `${m.color}14` : "#fff",
+                          cursor: "pointer",
+                          fontWeight: 700,
+                          fontSize: 13,
+                          color: active ? m.color : C.text,
+                        }}
+                      >
+                        <Icon size={16}/> {m.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </FG>
+              <FG label="Notas internas (opcional)" full>
+                <input
+                  style={{ ...inp, fontSize: 16, background: "#fff" }}
+                  value={salidaForm.notas}
+                  onChange={e => setSalidaForm(f => ({ ...f, notas: e.target.value }))}
+                  placeholder="Referencia, factura, persona que retira…"
+                />
+              </FG>
+              <FG label="Comprobante / nº factura (opcional)" full>
+                <input
+                  style={{ ...inp, fontSize: 16, background: "#fff" }}
+                  value={salidaForm.comprobante}
+                  onChange={e => setSalidaForm(f => ({ ...f, comprobante: e.target.value }))}
+                  placeholder="Ej: FAC-2026-0042"
+                />
+              </FG>
+            </div>
+
+            {hoySalidas.length > 0 && (
+              <div style={{ background: C.card, borderRadius: 16, padding: 16, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>Salidas de hoy ({hoySalidas.length})</div>
+                <div style={{ display: "grid", gap: 8, maxHeight: 220, overflowY: "auto" }}>
+                  {hoySalidas.slice(0, 12).map(m => (
+                    <div key={m.id} style={{ padding: "10px 12px", borderRadius: 10, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 12 }}>
+                      <div style={{ fontWeight: 700, color: "#991B1B" }}>−{fmt(m.monto)} · {tpvSalidaTipoLabel[m.catSalida] || m.catSalida || "Salida"}</div>
+                      <div style={{ color: C.text, marginTop: 4 }}>{m.concepto}</div>
+                      <div style={{ color: C.muted, marginTop: 2 }}>{m.metodo}{m.comprobante ? ` · ${m.comprobante}` : ""}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: C.card, borderRadius: 16, padding: 18, boxShadow: "0 4px 20px rgba(0,0,0,.08)", position: narrow ? "static" : "sticky", top: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: C.muted, marginBottom: 8, textTransform: "uppercase", letterSpacing: ".06em" }}>Importe a retirar</div>
+            <div style={{
+              fontSize: 36,
+              fontWeight: 800,
+              textAlign: "right",
+              padding: "12px 14px",
+              borderRadius: 12,
+              background: "#FEF2F2",
+              border: "2px solid #FECACA",
+              color: "#991B1B",
+              marginBottom: 12,
+              minHeight: 56,
+            }}>
+              {salidaDisplay ? `${salidaDisplay} €` : "0,00 €"}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
+              {keys.flat().map(k => (
+                <button
+                  key={`sal-k-${k}`}
+                  type="button"
+                  onClick={() => {
+                    if (k === "⌫") salidaKeypadBack()
+                    else appendSalidaDigit(k)
+                  }}
+                  style={{
+                    minHeight: 52,
+                    borderRadius: 12,
+                    border: `1px solid ${C.border}`,
+                    background: k === "⌫" ? C.subtle : "#fff",
+                    fontSize: k === "⌫" ? 18 : 22,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <Btn variant="outline" style={{ flex: 1 }} onClick={salidaKeypadClear}>Limpiar</Btn>
+            </div>
+            <Btn
+              variant="danger"
+              style={{ width: "100%", minHeight: 52, fontWeight: 800, justifyContent: "center" }}
+              disabled={salidaBusy || !sesionAbierta}
+              onClick={() => void registrarSalida()}
+            >
+              {salidaBusy ? <Loader2 size={16} className="erp-spin"/> : <ArrowDownRight size={16}/>}
+              {salidaBusy ? " Registrando…" : " Registrar salida"}
+            </Btn>
+            {!sesionAbierta && (
+              <p style={{ fontSize: 11, color: C.danger, marginTop: 10, textAlign: "center" }}>Abrí la caja para registrar salidas</p>
+            )}
+            <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: C.subtle, fontSize: 12, color: C.muted, lineHeight: 1.45 }}>
+              Salidas hoy: <strong style={{ color: C.danger }}>{fmt(resumenHoy.salidas.total)}</strong>
+              {salidaMetodo === "efectivo" && sesionAbierta && (
+                <> · Tras esta salida, efectivo teórico: <strong>{fmt(teoricoCierre.efectivo - (parseFloat(salidaDisplay.replace(",", ".")) || 0))}</strong></>
+              )}
             </div>
           </div>
         </div>
@@ -7220,47 +9628,193 @@ function PuntoVenta({ data, setData, clinic }) {
       {tab === "historial" && (
         <div style={{ background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
           <h3 style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}>Movimientos TPV · Clínica {clinic}</h3>
-          {cierre && (
+          {ultimoCierre && ultimoCierre.fecha === TODAY && (
             <div style={{ fontSize: 12, marginBottom: 14, padding: 12, background: C.subtle, borderRadius: 10 }}>
-              Último cierre hoy: Efectivo {fmt(cierre.efectivo)} · Tarjeta {fmt(cierre.tarjeta)} · Transferencia {fmt(cierre.transferencia)}
+              Cierre de hoy: Efectivo contado {fmt(sumConteoEur(ultimoCierre.conteoCierreEfectivo))} (teórico {fmt(ultimoCierre.teoricoEfectivo)}) ·
+              Tarjeta {fmt(ultimoCierre.cierreTarjeta || 0)} · Transferencia {fmt(ultimoCierre.cierreTransferencia || 0)}
+              {ultimoCierre.diferenciaEfectivo ? ` · Dif. ${fmt(ultimoCierre.diferenciaEfectivo)}` : ""}
             </div>
           )}
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
-              <THead cols={["Fecha", "Concepto", "Medio", "Monto", "Comprobante"]} />
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 680 }}>
+              <THead cols={["Fecha", "Tipo", "Concepto", "Categoría", "Medio", "Monto", "Comprobante"]} />
               <tbody>
-                {movs.slice(0, 40).map(m => (
-                  <tr key={m.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
+                {movs.slice(0, 50).map(m => {
+                  const esSalida = m.tipo === "salida"
+                  return (
+                  <tr key={m.id} style={{ borderBottom: `1px solid ${C.subtle}`, background: esSalida ? "#FFF5F5" : undefined }}>
                     <td style={{ padding: "10px 12px", fontSize: 12 }}>{fmtDate(m.fecha)}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 13 }}>{m.concepto}</td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <Badge type={esSalida ? "cancelado" : "confirmado"}>{esSalida ? "Salida" : "Ingreso"}</Badge>
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, maxWidth: 280 }}>{m.concepto}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted }}>{esSalida ? (tpvSalidaTipoLabel[m.catSalida] || m.catSalida || "—") : "Cobro"}</td>
                     <td style={{ padding: "10px 12px" }}><Badge type="gray">{m.metodo}</Badge></td>
-                    <td style={{ padding: "10px 12px", fontWeight: 800 }}>{fmt(m.monto)}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted }}>{m.comprobante}</td>
+                    <td style={{ padding: "10px 12px", fontWeight: 800, color: esSalida ? C.danger : "#059669" }}>{esSalida ? "−" : ""}{fmt(m.monto)}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 11, color: C.muted }}>{m.comprobante || "—"}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
+
+      <Modal open={openApertura} onClose={() => !cajaBusy && setOpenApertura(false)} title="Apertura de caja — conteo fondo inicial"
+        footer={<>
+          <Btn variant="outline" onClick={() => setOpenApertura(false)} disabled={cajaBusy}>Cancelar</Btn>
+          <Btn onClick={() => void abrirCaja()} disabled={cajaBusy}>{cajaBusy ? "Abriendo…" : "Confirmar apertura"}</Btn>
+        </>}>
+        <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.5 }}>
+          Contá billetes y monedas que dejás en la caja al iniciar el turno. Ese monto es el <strong>fondo inicial</strong> y se suma a los cobros en efectivo del día.
+        </p>
+        <ConteoEfectivoPanel conteo={conteoApertura} onChange={setConteoApertura} compact={narrow} />
+      </Modal>
+
+      <Modal open={openCierre} onClose={() => !cajaBusy && setOpenCierre(false)} title="Cierre de caja — arqueo"
+        footer={<>
+          <Btn variant="outline" onClick={() => setOpenCierre(false)} disabled={cajaBusy}>Cancelar</Btn>
+          <Btn variant="danger" onClick={() => void cerrarCaja()} disabled={cajaBusy}>{cajaBusy ? "Cerrando…" : "Confirmar cierre"}</Btn>
+        </>}>
+        <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.5 }}>
+          Contá el efectivo físico en caja y cargá los totales del datáfono y otros medios. El sistema compara con lo registrado en TPV.
+        </p>
+        <div style={{ fontSize: 12, fontWeight: 800, color: C.violet, marginBottom: 10 }}>1 · Efectivo (billetes y monedas)</div>
+        <ConteoEfectivoPanel conteo={conteoCierre} onChange={setConteoCierre} compact={narrow} />
+        <div style={{ marginTop: 18, display: "grid", gap: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.violet }}>2 · Medios electrónicos y banco</div>
+          <FG label="Total tarjeta / datáfono (contado)">
+            <input style={inp} type="number" min="0" step="0.01" value={cierreTarjeta} onChange={e => setCierreTarjeta(e.target.value)} placeholder={String(teoricoCierre.tarjeta || "0")} />
+          </FG>
+          <FG label="Transferencias / Bizum (contado)">
+            <input style={inp} type="number" min="0" step="0.01" value={cierreTransferencia} onChange={e => setCierreTransferencia(e.target.value)} placeholder={String(teoricoCierre.transferencia || "0")} />
+          </FG>
+          <FG label="Banco / otros (opcional)">
+            <input style={inp} type="number" min="0" step="0.01" value={cierreBanco} onChange={e => setCierreBanco(e.target.value)} placeholder="0" />
+          </FG>
+          <FG label="Notas del cierre" full>
+            <textarea style={{ ...inp, minHeight: 64 }} value={notasCierre} onChange={e => setNotasCierre(e.target.value)} placeholder="Ej: faltante por cambio mal dado, depósito en banco a las 14h…" />
+          </FG>
+        </div>
+        <div style={{ marginTop: 18, padding: 14, background: C.subtle, borderRadius: 12, fontSize: 13 }}>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>Cuadre previsto</div>
+          <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Efectivo — teórico</span><strong>{fmt(teoricoCierre.efectivo)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Efectivo — contado</span><strong>{fmt(contadoCierreEfectivo)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", color: diffColor(contadoCierreEfectivo - teoricoCierre.efectivo) }}>
+              <span>Diferencia efectivo</span><strong>{fmt(contadoCierreEfectivo - teoricoCierre.efectivo)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+              <span>Tarjeta — teórico / contado</span>
+              <strong>{fmt(teoricoCierre.tarjeta)} / {fmt(parseFloat(String(cierreTarjeta).replace(",", ".")) || 0)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", color: diffColor((parseFloat(String(cierreTarjeta).replace(",", ".")) || 0) - teoricoCierre.tarjeta) }}>
+              <span>Diferencia tarjeta</span>
+              <strong>{fmt((parseFloat(String(cierreTarjeta).replace(",", ".")) || 0) - teoricoCierre.tarjeta)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>Transferencia — teórico / contado</span>
+              <strong>{fmt(teoricoCierre.transferencia)} / {fmt(parseFloat(String(cierreTransferencia).replace(",", ".")) || 0)}</strong>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
 
-// ─── SECTION: MARKETING (WhatsApp + cumple + reactivación) ─────
+// ─── SECTION: MARKETING (automatización + campañas/chats/asistente) ─────
+function MarketingModulo({ data, setData, clinic }) {
+  const [vista, setVista] = useState("auto")
+  return (
+    <div>
+      <div style={{ marginBottom: 16, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <TabBar
+          tabs={[
+            { id: "auto", label: "Automatización" },
+            { id: "centro", label: "Campañas, chats y agente" },
+          ]}
+          active={vista}
+          onChange={setVista}
+        />
+      </div>
+      {vista === "auto" && <MarketingHub data={data} setData={setData} clinic={clinic} />}
+      {vista === "centro" && (
+        <MarketingCentroPanel
+          data={data}
+          setData={setData}
+          clinic={clinic}
+          C={C}
+          inp={inp}
+          Btn={Btn}
+          FG={FG}
+          TabBar={TabBar}
+          TODAY={TODAY}
+        />
+      )}
+    </div>
+  )
+}
+
 function MarketingHub({ data, setData, clinic }) {
   const compact = useMediaQuery("(max-width: 980px)")
   const [sub, setSub] = useState("wa")
+  const [waStatus, setWaStatus] = useState(null)
+  const [waSendErr, setWaSendErr] = useState("")
+  const [sendingKey, setSendingKey] = useState("")
   const cfg = data.waConfig
   const mk = data.marketingAutomatizacion || {}
+  const ig = data.instagramConfig || {}
   const setCfg = patch => setData(d => ({ ...d, waConfig: { ...d.waConfig, ...patch } }))
   const setMk = patch => setData(d => ({ ...d, marketingAutomatizacion: { ...d.marketingAutomatizacion, ...patch } }))
+  const setIg = patch => setData(d => ({ ...d, instagramConfig: { ...d.instagramConfig, ...patch } }))
 
   const pacientesClinica = useMemo(
     () => (data.pacientes || []).filter(p => p && p.clinicId != null && +p.clinicId === +clinic),
     [data.pacientes, clinic],
   )
   const pacById = useMemo(() => Object.fromEntries(pacientesClinica.map(p => [p.id, p])), [pacientesClinica])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const r = await fetch("/api/wa/status").catch(() => null)
+      const j = await r?.json?.().catch(() => null)
+      if (!cancelled && j) setWaStatus(j)
+    })()
+    const t = setInterval(() => {
+      if (cancelled) return
+      fetch("/api/wa/status").then(r => r.json()).then(setWaStatus).catch(() => {})
+    }, 8000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [])
+
+  const enviarBaileys = async (tel, text, key) => {
+    setWaSendErr("")
+    setSendingKey(key)
+    try {
+      if (waStatus?.status !== "connected") {
+        setWaSendErr("Conectá WhatsApp en la pestaña «Campañas, chats y agente» (QR con Baileys) antes de enviar.")
+        return
+      }
+      const to = String(tel || "").replace(/\D/g, "")
+      if (!to) { setWaSendErr("Falta teléfono."); return }
+      const r = await fetch("/api/wa/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, texto: String(text || "") }),
+      })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || j?.error) { setWaSendErr(String(j?.error || "No se pudo enviar.")); return }
+    } finally {
+      setSendingKey("")
+    }
+  }
 
   const mensajePara = r => {
     const p = pacById[r.pacienteId]
@@ -7306,10 +9860,10 @@ function MarketingHub({ data, setData, clinic }) {
   return (
     <div>
       <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Marketing automatizado</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:18 }}>Cola WhatsApp, cumpleaños y reactivación. Automático 24/7 requiere workers + API (Meta / email).</p>
+      <p style={{ fontSize:13, color:C.muted, marginBottom:18 }}>WhatsApp con Baileys: conectá el QR en «Campañas, chats y agente». Instagram: API Meta (variables en .env del backend).</p>
       <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch", paddingBottom:2 }}>
-        <div style={{ minWidth: compact ? 420 : undefined }}>
-          <TabBar tabs={[{ id:"wa", label:"WhatsApp turnos" }, { id:"cumple", label:"Cumpleaños" }, { id:"react", label:"Reactivación" }]} active={sub} onChange={setSub}/>
+        <div style={{ minWidth: compact ? 480 : undefined }}>
+          <TabBar tabs={[{ id:"wa", label:"WhatsApp turnos" }, { id:"cumple", label:"Cumpleaños" }, { id:"react", label:"Reactivación" }, { id:"ig", label:"Instagram" }]} active={sub} onChange={setSub}/>
         </div>
       </div>
 
@@ -7324,19 +9878,34 @@ function MarketingHub({ data, setData, clinic }) {
               <FG label="Horas antes"><input type="number" style={inp} min={1} value={cfg.horasAntes} onChange={e=>setCfg({ horasAntes:+e.target.value||24 })}/></FG>
               <FG label="Activo"><label style={{ display:"flex", alignItems:"center", gap:8, fontSize:13 }}><input type="checkbox" checked={cfg.activo} onChange={e=>setCfg({ activo: e.target.checked })}/> Habilitado</label></FG>
             </div>
+            <div style={{ marginTop:20, paddingTop:16, borderTop:`1px solid ${C.subtle}` }}>
+              <h3 style={{ fontSize:14, fontWeight:700, marginBottom:10 }}>WhatsApp (Baileys)</h3>
+              <p style={{ fontSize:12, color:C.muted, marginBottom:10 }}>Sesión de WhatsApp en <code style={codeStyle()}>aplicacion-web/.wa-auth</code> (no subas esa carpeta a git).</p>
+              <p style={{ fontSize:12, color:waStatus?.status === "connected" ? C.success : C.muted, marginBottom:8 }}>
+                {waStatus == null
+                  ? "Comprobando Baileys…"
+                  : waStatus.status === "connected"
+                    ? `Conectado${waStatus.user?.name ? ` · ${waStatus.user.name}` : ""}`
+                    : waStatus.status === "qr"
+                      ? "Esperando escaneo del QR (abrí «Campañas, chats y agente»)"
+                      : "No conectado. Abrí la pestaña «Campañas, chats y agente» y escaneá el QR."}
+              </p>
+            </div>
           </div>
           <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
               <h3 style={{ fontSize:14, fontWeight:700 }}>Cola</h3>
               <Btn variant="outline" sm onClick={generarDesdeAgenda} style={{ width: compact ? "100%" : "auto", justifyContent:"center" }}><MessageCircle size={14}/> Desde agenda</Btn>
             </div>
+            {waSendErr && <p style={{ fontSize:12, color:C.danger, marginBottom:10 }}>{waSendErr}</p>}
             <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 620 : undefined }}>
-                <THead cols={["Paciente","Turno","Estado","Acción"]}/>
+              <table style={{ width:"100%", borderCollapse:"collapse", minWidth: compact ? 720 : undefined }}>
+                <THead cols={["Paciente","Turno","Estado","Enlace","Baileys"]}/>
                 <tbody>
                   {data.recordatoriosWA.filter(r => pacById[r.pacienteId]).map(r => {
                     const p = pacById[r.pacienteId]
                     const msg = mensajePara(r)
+                    const sk1 = `wt-${r.id}`
                     return (
                       <tr key={r.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
                         <td style={{ padding:"10px 12px", fontWeight:600 }}>{p?.nombre}</td>
@@ -7346,13 +9915,22 @@ function MarketingHub({ data, setData, clinic }) {
                           <a href={waUrl(r.tel || p?.tel, msg)} target="_blank" rel="noreferrer" style={{ fontSize:12, fontWeight:600, color:C.violet }}>WA</a>
                           {r.estado !== "enviado" && <Btn sm variant="outline" onClick={()=>marcarEnviado(r.id)} style={{ marginLeft:8 }}>OK</Btn>}
                         </td>
+                        <td style={{ padding:"10px 12px" }}>
+                          {waStatus?.status === "connected" ? (
+                            <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
+                              <Btn sm onClick={() => enviarBaileys(r.tel || p?.tel, msg, sk1)} disabled={sendingKey === sk1} style={{ minHeight:30 }}>
+                                {sendingKey === sk1 ? <Loader2 size={12} className="animate-spin"/> : <Send size={12}/>} Enviar
+                              </Btn>
+                            </div>
+                          ) : <span style={{ fontSize:11, color:C.muted }}>—</span>}
+                        </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
             </div>
-            {data.recordatoriosWA.filter(r => pacById[r.pacienteId]).length===0 && <p style={{ fontSize:12, color:C.muted, marginTop:10 }}>Sin recordatorios aún. Tocá "Desde agenda" para generar la cola.</p>}
+            {data.recordatoriosWA.filter(r => pacById[r.pacienteId]).length===0 && <p style={{ fontSize:12, color:C.muted, marginTop:10 }}>Sin recordatorios aún. Tocá «Desde agenda» para generar la cola.</p>}
           </div>
         </div>
       )}
@@ -7364,13 +9942,22 @@ function MarketingHub({ data, setData, clinic }) {
           </FG>
           <label style={{ display:"flex", alignItems:"center", gap:8, marginTop:12, fontSize:13 }}><input type="checkbox" checked={!!mk.cumpleActivo} onChange={e=>setMk({ cumpleActivo: e.target.checked })}/> Activo (scheduler en backend)</label>
           <h4 style={{ marginTop:20, fontSize:13 }}>Cumplen hoy ({fmtDate(TODAY)})</h4>
-          {cumpleHoy.map(p => (
-            <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:`1px solid ${C.subtle}` }}>
-              <span>{p.nombre}</span>
-              <a href={waUrl(p.tel, buildWaMessage(mk.plantillaCumple||"Feliz cumple {nombre}", { nombre:p.nombre, fecha:"", hora:"" }))} target="_blank" rel="noreferrer" style={{ fontWeight:600, color:C.violet }}>WhatsApp</a>
-            </div>
-          ))}
-          {cumpleHoy.length===0 && <p style={{ color:"#94A3B8", fontSize:13 }}>Nadie cumple hoy (demo).</p>}
+          {cumpleHoy.map(p => {
+            const cmsg = buildWaMessage(mk.plantillaCumple || "Feliz cumple {nombre}", { nombre: p.nombre, fecha: "", hora: "" })
+            const ck1 = `cum-t-${p.id}`
+            return (
+              <div key={p.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8, padding:"10px 0", borderBottom:`1px solid ${C.subtle}` }}>
+                <span>{p.nombre}</span>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+                  <a href={waUrl(p.tel, cmsg)} target="_blank" rel="noreferrer" style={{ fontWeight:600, color:C.violet }}>WhatsApp</a>
+                  {waStatus?.status === "connected" ? (
+                    <Btn sm onClick={() => enviarBaileys(p.tel, cmsg, ck1)} disabled={sendingKey === ck1}>{sendingKey === ck1 ? <Loader2 size={12} className="animate-spin"/> : <Send size={12}/>} Enviar</Btn>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })}
+          {cumpleHoy.length===0 && <p style={{ color:"#94A3B8", fontSize:13 }}>Nadie cumple años hoy.</p>}
         </div>
       )}
 
@@ -7386,15 +9973,290 @@ function MarketingHub({ data, setData, clinic }) {
             <textarea style={{ ...inp, minHeight:70 }} value={mk.plantillaReactivacion||""} onChange={e=>setMk({ plantillaReactivacion: e.target.value })}/>
           </FG>
           <h4 style={{ marginTop:16, fontSize:13 }}>Candidatos (&gt;{mk.reactivacionDias||30} días sin visita)</h4>
-          {reactivar.map(p => (
-            <div key={p.id} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:`1px solid ${C.subtle}` }}>
-              <span>{p.nombre}</span>
-              <a href={waUrl(p.tel, buildWaMessage(mk.plantillaReactivacion||"", { nombre:p.nombre, fecha:"", hora:"" }))} target="_blank" rel="noreferrer" style={{ color:C.violet, fontWeight:600 }}>Contactar</a>
-            </div>
-          ))}
+          {reactivar.map(p => {
+            const rmsg = buildWaMessage(mk.plantillaReactivacion || "", { nombre: p.nombre, fecha: "", hora: "" })
+            const rk1 = `re-t-${p.id}`
+            return (
+              <div key={p.id} style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:8, alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${C.subtle}` }}>
+                <span>{p.nombre}</span>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+                  <a href={waUrl(p.tel, rmsg)} target="_blank" rel="noreferrer" style={{ color:C.violet, fontWeight:600 }}>Contactar</a>
+                  {waStatus?.status === "connected" ? (
+                    <Btn sm onClick={() => enviarBaileys(p.tel, rmsg, rk1)} disabled={sendingKey === rk1}>{sendingKey === rk1 ? <Loader2 size={12} className="animate-spin"/> : <Send size={12}/>} Enviar</Btn>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })}
           {reactivar.length===0 && <p style={{ color:"#94A3B8", fontSize:13 }}>Nadie en umbral (o faltan fechas de visita).</p>}
         </div>
       )}
+
+      {sub==="ig" && (
+        <div style={{ marginTop:18, background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)", maxWidth:960 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+            <Camera size={22} color={C.violet} />
+            <h3 style={{ fontSize:16, fontWeight:700, margin:0 }}>Instagram Graph API</h3>
+          </div>
+          <p style={{ fontSize:13, color:C.muted, marginBottom:16 }}>
+            Los secretos no se guardan en el navegador: configurá el servidor con variables de entorno y, si hacés llamadas desde backend, usá el token de larga duración de Meta.
+          </p>
+          <p style={{ fontSize:12, color:C.muted, marginBottom:12 }}>Ejemplo en <code style={codeStyle()}>.env</code> del backend o de Vite (solo servidor):</p>
+          <pre style={{ ...codeStyle(C.subtle), display:"block", padding:14, borderRadius:12, fontSize:11, lineHeight:1.5, overflowX:"auto", whiteSpace:"pre-wrap", wordBreak:"break-all" }}>
+{`INSTAGRAM_APP_ID=
+INSTAGRAM_APP_SECRET=
+INSTAGRAM_USER_ID=
+INSTAGRAM_PAGE_ID=
+INSTAGRAM_PAGE_ACCESS_TOKEN=
+# Graph API: https://developers.facebook.com/docs/instagram-api`}
+          </pre>
+          <div style={{ display:"grid", gridTemplateColumns:compact ? "1fr" : "1fr 1fr", gap:14, marginTop:18 }}>
+            <FG label="Versión Graph API (referencia)">
+              <input style={inp} value={ig.graphApiVersion || "v21.0"} onChange={e=>setIg({ graphApiVersion: e.target.value })}/>
+            </FG>
+            <FG label="App ID (Meta Developers)">
+              <input style={inp} placeholder="Opcional, notas" value={ig.appId || ""} onChange={e=>setIg({ appId: e.target.value })}/>
+            </FG>
+            <FG label="Instagram Business Account ID">
+              <input style={inp} placeholder="1784…" value={ig.instagramBusinessId || ""} onChange={e=>setIg({ instagramBusinessId: e.target.value })}/>
+            </FG>
+            <FG label="Facebook Page ID vinculada">
+              <input style={inp} placeholder="Page ID" value={ig.pageId || ""} onChange={e=>setIg({ pageId: e.target.value })}/>
+            </FG>
+          </div>
+          <p style={{ fontSize:12, color:C.muted, marginTop:14 }}>Cuando quieras publicar métricas o mensajes DM desde el ERP, conectá esas variables al plugin de servidor; aquí solo quedan los identificadores de referencia.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── SECTION: LEADS / CAPTACIÓN (web oficial → ERP) ────────────
+const LEAD_ESTADOS = [
+  { id:"nuevo",      label:"Nuevo",      color:"#2563EB", bg:"#EFF6FF" },
+  { id:"contactado", label:"Contactado", color:"#9333EA", bg:"#FAF5FF" },
+  { id:"agendado",   label:"Agendado",   color:"#D97706", bg:"#FFFBEB" },
+  { id:"ganado",     label:"Ganado",     color:"#059669", bg:"#ECFDF5" },
+  { id:"perdido",    label:"Perdido",    color:"#DC2626", bg:"#FEF2F2" },
+]
+const leadEstadoMeta = id => LEAD_ESTADOS.find(e => e.id === (id || "nuevo")) || LEAD_ESTADOS[0]
+
+function LeadsCRM({ clinic, role, onGoAgenda }) {
+  const compact = useMediaQuery("(max-width: 980px)")
+  const hasSb = Boolean(import.meta.env.VITE_SUPABASE_URL)
+  const [leads, setLeads] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [fEstado, setFEstado] = useState("todos")
+  const [q, setQ] = useState("")
+  const [sel, setSel] = useState(null)
+  const [notaDraft, setNotaDraft] = useState("")
+
+  const load = useCallback(async () => {
+    if (!hasSb) { setLoading(false); return }
+    const { data, error } = await supabase
+      .from("leads_crm")
+      .select("id, clinic_id, name, email, phone, company, status, source, notes, created_at, updated_at")
+      .eq("clinic_id", clinic)
+      .order("created_at", { ascending: false })
+    if (!error && Array.isArray(data)) setLeads(data)
+    setLoading(false)
+  }, [clinic, hasSb])
+
+  useEffect(() => {
+    setLoading(true)
+    void load()
+    if (!hasSb) return
+    const ch = supabase
+      .channel("erp-live-leads")
+      .on("postgres_changes", { event: "*", schema: "public", table: "leads_crm" }, () => { void load() })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [load, hasSb])
+
+  const counts = useMemo(() => {
+    const c = { todos: leads.length }
+    leads.forEach(l => { const s = l.status || "nuevo"; c[s] = (c[s] || 0) + 1 })
+    return c
+  }, [leads])
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    return leads.filter(l => {
+      if (fEstado !== "todos" && (l.status || "nuevo") !== fEstado) return false
+      if (!term) return true
+      return [l.name, l.email, l.phone, l.company, l.notes, l.source].some(v => String(v || "").toLowerCase().includes(term))
+    })
+  }, [leads, fEstado, q])
+
+  const setEstado = async (lead, status) => {
+    const prev = lead.status
+    setLeads(ls => ls.map(l => l.id === lead.id ? { ...l, status } : l))
+    const { error } = await supabase.from("leads_crm").update({ status, updated_at: new Date().toISOString() }).eq("id", lead.id)
+    if (error) { alert("No se pudo actualizar el estado: " + (error.message || error)); setLeads(ls => ls.map(l => l.id === lead.id ? { ...l, status: prev } : l)) }
+  }
+
+  const abrirNota = lead => { setSel(lead); setNotaDraft(lead.notes || "") }
+  const guardarNota = async () => {
+    if (!sel) return
+    const { error } = await supabase.from("leads_crm").update({ notes: notaDraft, updated_at: new Date().toISOString() }).eq("id", sel.id)
+    if (error) { alert("No se pudo guardar la nota: " + (error.message || error)); return }
+    setLeads(ls => ls.map(l => l.id === sel.id ? { ...l, notes: notaDraft } : l))
+    setSel(null)
+  }
+
+  const delLead = async lead => {
+    if (!window.confirm("¿Eliminar este lead definitivamente?")) return
+    const { error } = await supabase.from("leads_crm").delete().eq("id", lead.id)
+    if (error) { alert("No se pudo eliminar: " + (error.message || error)); return }
+    setLeads(ls => ls.filter(l => l.id !== lead.id))
+    if (sel?.id === lead.id) setSel(null)
+  }
+
+  const [convirtiendo, setConvirtiendo] = useState(null)
+  const convertir = async lead => {
+    const nombre = String(lead.name || lead.email || lead.phone || "").trim()
+    if (!nombre) { alert("El lead no tiene datos suficientes para crear una ficha."); return }
+    if (convirtiendo) return
+    setConvirtiendo(lead.id)
+    try {
+      // Evita duplicar ficha si el cliente ya existe en esta clínica (mismo nombre).
+      const { data: existente } = await supabase
+        .from("clientes").select("id").eq("clinic_id", clinic).ilike("nombre", nombre).limit(1)
+      let yaExistia = Array.isArray(existente) && existente.length > 0
+      if (!yaExistia) {
+        const { error: e1 } = await supabase.from("clientes").insert({
+          clinic_id: clinic, nombre, tel: lead.phone || "", email: lead.email || "", dni: "", es_paciente: false,
+        })
+        if (e1) { alert("No se pudo crear la ficha de cliente: " + (e1.message || e1)); return }
+      }
+      await supabase.from("leads_crm").update({ status: "ganado", updated_at: new Date().toISOString() }).eq("id", lead.id)
+      setLeads(ls => ls.map(l => l.id === lead.id ? { ...l, status: "ganado" } : l))
+      const msg = yaExistia ? "Ya existía una ficha con ese nombre (no se duplicó)." : "Ficha de cliente creada."
+      if (window.confirm(`${msg} ¿Ir a la Agenda para agendarle un turno?`)) onGoAgenda?.()
+    } finally {
+      setConvirtiendo(null)
+    }
+  }
+
+  const fmtFecha = iso => { if (!iso) return ""; const d = new Date(iso); return d.toLocaleDateString("es-ES", { day:"2-digit", month:"2-digit", year:"numeric" }) + " " + d.toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" }) }
+
+  if (!hasSb) {
+    return (
+      <div style={{ background:C.card, borderRadius:16, padding:24, maxWidth:560 }}>
+        <h2 style={{ fontSize:18, fontWeight:700, marginBottom:8 }}>Leads — captación</h2>
+        <p style={{ fontSize:13, color:C.muted, lineHeight:1.5 }}>Configurá Supabase para gestionar los leads que llegan desde la web oficial.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700 }}>Leads — captación</h2>
+          <p style={{ fontSize:13, color:C.muted, marginTop:2 }}>Contactos que llegan desde la web oficial y otras fuentes. Cambiá el estado, dejá notas y convertilos en cliente.</p>
+        </div>
+      </div>
+
+      {/* Filtros por estado */}
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+        {[{ id:"todos", label:"Todos", color:C.text, bg:C.subtle }, ...LEAD_ESTADOS].map(e => {
+          const active = fEstado === e.id
+          return (
+            <button key={e.id} type="button" onClick={() => setFEstado(e.id)} style={{
+              padding:"7px 12px", borderRadius:999, border:`1.5px solid ${active ? e.color : C.border}`,
+              background: active ? e.bg : "#fff", color: active ? e.color : C.muted, fontWeight:700, fontSize:12.5, cursor:"pointer",
+              display:"flex", alignItems:"center", gap:6,
+            }}>
+              {e.label}<span style={{ fontSize:11, opacity:.8 }}>{counts[e.id] || 0}</span>
+            </button>
+          )
+        })}
+        <div style={{ flex:1, minWidth:180, display:"flex", alignItems:"center", gap:8, position:"relative" }}>
+          <Search size={15} style={{ position:"absolute", left:10, color:C.muted }} />
+          <input style={{ ...inp, paddingLeft:32, width:"100%" }} placeholder="Buscar nombre, email, teléfono…" value={q} onChange={e => setQ(e.target.value)} />
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ background:C.card, borderRadius:16, padding:36, textAlign:"center", color:C.muted, fontSize:14 }}>Cargando leads…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ background:C.card, borderRadius:16, padding:36, textAlign:"center", color:"#94A3B8", fontSize:14 }}>
+          {leads.length === 0 ? "Todavía no llegaron leads. Cuando la web envíe un formulario, aparecerán acá." : "No hay leads con ese filtro."}
+        </div>
+      ) : compact ? (
+        <div style={{ display:"grid", gap:12 }}>
+          {filtered.map(l => {
+            const m = leadEstadoMeta(l.status)
+            return (
+              <div key={l.id} style={{ background:C.card, borderRadius:14, padding:16, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", gap:8, alignItems:"flex-start" }}>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:14 }}>{l.name || "—"}</div>
+                    <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{l.email || ""}{l.email && l.phone ? " · " : ""}{l.phone || ""}</div>
+                  </div>
+                  <span style={{ padding:"3px 9px", borderRadius:999, background:m.bg, color:m.color, fontWeight:700, fontSize:11 }}>{m.label}</span>
+                </div>
+                {l.notes && <div style={{ fontSize:12.5, color:C.text, marginTop:8, lineHeight:1.4 }}>{l.notes}</div>}
+                <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>{l.source ? `Fuente: ${l.source} · ` : ""}{fmtFecha(l.created_at)}</div>
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10, alignItems:"center" }}>
+                  <select style={{ ...inp, padding:"7px 10px", fontSize:12.5 }} value={l.status || "nuevo"} onChange={e => setEstado(l, e.target.value)}>
+                    {LEAD_ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+                  </select>
+                  <Btn sm variant="outline" onClick={() => abrirNota(l)}>Nota</Btn>
+                  <Btn sm disabled={convirtiendo===l.id} onClick={() => convertir(l)}><UserPlus size={13}/> {convirtiendo===l.id?"…":"Convertir"}</Btn>
+                  <Btn sm variant="danger" onClick={() => delLead(l)}><Trash2 size={13}/></Btn>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div style={{ background:C.card, borderRadius:16, boxShadow:"0 1px 3px rgba(0,0,0,.06)", overflow:"hidden" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <THead cols={["Contacto", "Mensaje / notas", "Fuente", "Recibido", "Estado", "Acciones"]} />
+            <tbody>
+              {filtered.map(l => {
+                const m = leadEstadoMeta(l.status)
+                return (
+                  <tr key={l.id} style={{ borderBottom:`1px solid ${C.subtle}` }}>
+                    <td style={{ padding:"11px 14px", verticalAlign:"top" }}>
+                      <div style={{ fontWeight:700 }}>{l.name || "—"}</div>
+                      <div style={{ fontSize:12, color:C.muted, marginTop:2, display:"flex", flexDirection:"column", gap:2 }}>
+                        {l.phone && <span style={{ display:"flex", alignItems:"center", gap:5 }}><Phone size={11}/> {l.phone}</span>}
+                        {l.email && <span style={{ wordBreak:"break-all" }}>{l.email}</span>}
+                        {l.company && <span>{l.company}</span>}
+                      </div>
+                    </td>
+                    <td style={{ padding:"11px 14px", fontSize:12.5, color:C.text, maxWidth:280, verticalAlign:"top" }}>{l.notes || <span style={{ color:C.muted }}>—</span>}</td>
+                    <td style={{ padding:"11px 14px", fontSize:12, color:C.muted, verticalAlign:"top" }}>{l.source || "—"}</td>
+                    <td style={{ padding:"11px 14px", fontSize:12, color:C.muted, whiteSpace:"nowrap", verticalAlign:"top" }}>{fmtFecha(l.created_at)}</td>
+                    <td style={{ padding:"11px 14px", verticalAlign:"top" }}>
+                      <select style={{ ...inp, padding:"6px 8px", fontSize:12, background:m.bg, color:m.color, fontWeight:700, border:`1px solid ${m.color}33` }} value={l.status || "nuevo"} onChange={e => setEstado(l, e.target.value)}>
+                        {LEAD_ESTADOS.map(e => <option key={e.id} value={e.id} style={{ background:"#fff", color:C.text }}>{e.label}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding:"11px 14px", verticalAlign:"top" }}>
+                      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                        <Btn sm variant="outline" onClick={() => abrirNota(l)}>Nota</Btn>
+                        <Btn sm disabled={convirtiendo===l.id} onClick={() => convertir(l)}><UserPlus size={13}/> {convirtiendo===l.id?"…":"Convertir"}</Btn>
+                        <Btn sm variant="danger" onClick={() => delLead(l)}><Trash2 size={13}/></Btn>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal open={!!sel} onClose={() => setSel(null)} title={`Nota — ${sel?.name || "lead"}`}
+        footer={<><Btn variant="outline" onClick={() => setSel(null)}>Cancelar</Btn><Btn onClick={guardarNota}>Guardar nota</Btn></>}>
+        <FG label="Notas de seguimiento" full>
+          <textarea style={{ ...inp, resize:"vertical", minHeight:120 }} value={notaDraft} onChange={e => setNotaDraft(e.target.value)} placeholder="Ej: llamada 12/06, interesada en bono láser…" />
+        </FG>
+      </Modal>
     </div>
   )
 }
@@ -7403,51 +10265,86 @@ function MarketingHub({ data, setData, clinic }) {
 function ReportesAvanzados({ data, clinic }) {
   const compact = useMediaQuery("(max-width: 980px)")
   const cd = data.clinics[clinic]
-  const profs = data.profesionales || []
 
-  const facturacionMes = useMemo(() => cd.movimientos.filter(m => m.tipo==="ingreso").reduce((a,m)=>a+m.monto,0), [cd.movimientos])
+  /** Especialistas reales que atienden agenda en esta clínica (antes usaba data.profesionales, siempre vacío). */
+  const profs = useMemo(
+    () => (data.empleados || []).filter(e => esEmpleadoAtiendeAgenda(e) && (+e.clinicId === +clinic || e.clinicId == null)),
+    [data.empleados, clinic]
+  )
+
+  const facturacionMes = useMemo(() => (cd.movimientos || []).filter(m => m.tipo==="ingreso").reduce((a,m)=>a+(+m.monto||0),0), [cd.movimientos])
   const rankingServicios = useMemo(() => {
     const map = {}
-    cd.turnos.forEach(t => { map[t.servicio] = (map[t.servicio]||0) + 1 })
+    cd.turnos.forEach(t => { if (t.servicio) map[t.servicio] = (map[t.servicio]||0) + 1 })
     return Object.entries(map).sort((a,b)=>b[1]-a[1])
   }, [cd.turnos])
-  const porProf = useMemo(() => profs.map(pr => {
-    const n = cd.turnos.filter(t => (t.profesionalId||1) === pr.id).length
-    const fact = cd.turnos.filter(t => (t.profesionalId||1) === pr.id).length * 195
-    const com = Math.round(fact * (pr.comisionPct/100))
-    return { ...pr, turnos:n, comisionEstimada:com }
-  }), [cd.turnos, profs])
 
+  /** Facturación y comisión REAL por especialista: precio del servicio facturado en turnos atendidos. */
+  const porProf = useMemo(() => {
+    const atendidos = cd.turnos.filter(t => t.estado === "listo_cobrar" || t.estado === "finalizado")
+    return profs.map(pr => {
+      const suyos = atendidos.filter(t => (t.empleadoId || t.profesionalId) === pr.id)
+      const fact = suyos.reduce((a, t) => {
+        const srv = (data.servicios || []).find(s => s.id === t.servicioFacturadoId || s.nombre === t.servicio)
+        return a + (+srv?.precio || 0)
+      }, 0)
+      const pct = +pr.comision || 0
+      return { ...pr, turnos: suyos.length, facturacion: fact, comision: Math.round(fact * (pct / 100)), comisionPct: pct }
+    }).sort((a, b) => b.facturacion - a.facturacion)
+  }, [cd.turnos, profs, data.servicios])
+
+  /** Ocupación de hoy = turnos / capacidad real (nº especialistas × huecos de jornada según slotMinutos). */
   const ocupacion = useMemo(() => {
-    const slots = 14
-    const usados = cd.turnos.filter(t=>t.fecha===TODAY).length
-    return Math.min(100, Math.round((usados/slots)*100))
+    const especialistas = profs.filter(e => e.activo !== false).length
+    const slotMin = +data.reservasOnlineConfig?.slotMinutos || 30
+    const slotsPorEsp = Math.max(1, Math.round((8 * 60) / slotMin))
+    const capacidad = Math.max(1, especialistas * slotsPorEsp)
+    const usados = cd.turnos.filter(t => t.fecha === TODAY && t.estado !== "cancelado").length
+    return { pct: Math.min(100, Math.round((usados / capacidad) * 100)), usados, capacidad, especialistas }
+  }, [cd.turnos, profs, data.reservasOnlineConfig])
+
+  /** Retención = % de pacientes con 2+ turnos sobre los que tienen al menos 1 (repeat-rate real). */
+  const retencion = useMemo(() => {
+    const byClient = {}
+    cd.turnos.forEach(t => {
+      const key = t.pacienteId || t.clienteId || `${(t.cliente || "").trim()}|${(t.tel || "").trim()}`
+      if (!key || key === "|") return
+      byClient[key] = (byClient[key] || 0) + 1
+    })
+    const cuentas = Object.values(byClient)
+    const total = cuentas.length
+    const repiten = cuentas.filter(n => n >= 2).length
+    return { pct: total ? Math.round((repiten / total) * 100) : null, repiten, total }
   }, [cd.turnos])
 
   return (
     <div>
       <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Reportes avanzados</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:22 }}>Facturación del período cargado, ranking, comisiones estimadas y ocupación (demo sobre datos locales).</p>
+      <p style={{ fontSize:13, color:C.muted, marginBottom:22 }}>Facturación, ranking de servicios, comisiones por especialista, ocupación y retención — calculados sobre los datos reales de esta clínica.</p>
       <div style={{ display:"grid", gridTemplateColumns:compact?"1fr":"repeat(3,1fr)", gap:14, marginBottom:18 }}>
-        <KpiCard title="Facturación (ingresos)" value={fmt(facturacionMes)} sub="Movimientos actuales clínica" icon={DollarSign} accent={C.success} />
-        <KpiCard title="Ocupación agenda hoy" value={`${ocupacion}%`} sub="Turnos hoy vs capacidad demo" icon={Calendar} accent={C.violet} />
-        <KpiCard title="Retención (proxy)" value="—" sub="Requiere cohortes en backend" icon={Users} accent="#06B6D4" />
+        <KpiCard title="Facturación (ingresos)" value={fmt(facturacionMes)} sub="Ingresos registrados de la clínica" icon={DollarSign} accent={C.success} />
+        <KpiCard title="Ocupación agenda hoy" value={`${ocupacion.pct}%`} sub={`${ocupacion.usados}/${ocupacion.capacidad} huecos · ${ocupacion.especialistas} especialista(s)`} icon={Calendar} accent={C.violet} />
+        <KpiCard title="Retención de pacientes" value={retencion.pct == null ? "—" : `${retencion.pct}%`} sub={retencion.total ? `${retencion.repiten}/${retencion.total} pacientes repiten` : "Sin turnos cargados"} icon={Users} accent="#06B6D4" />
       </div>
       <div style={{ display:"grid", gridTemplateColumns:compact?"1fr":"1fr 1fr", gap:18 }}>
         <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
           <h3 style={{ fontSize:14, fontWeight:700, marginBottom:12 }}>Servicios más solicitados</h3>
-          {rankingServicios.map(([s,c]) => (
-            <div key={s} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:`1px solid ${C.subtle}`, fontSize:13 }}><span>{s}</span><strong>{c}</strong></div>
-          ))}
+          {rankingServicios.length === 0
+            ? <p style={{ fontSize:13, color:C.muted }}>Sin turnos cargados todavía.</p>
+            : rankingServicios.map(([s,c]) => (
+                <div key={s} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:`1px solid ${C.subtle}`, fontSize:13 }}><span>{s}</span><strong>{c}</strong></div>
+              ))}
         </div>
         <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-          <h3 style={{ fontSize:14, fontWeight:700, marginBottom:12 }}>Rendimiento y comisiones (estimado)</h3>
-          {porProf.map(p => (
-            <div key={p.id} style={{ padding:"10px 0", borderBottom:`1px solid ${C.subtle}`, fontSize:13 }}>
-              <div style={{ fontWeight:700 }}>{p.nombre} <span style={{ color:C.muted, fontWeight:500 }}>{p.comisionPct}%</span></div>
-              <div style={{ fontSize:12, color:C.muted }}>Turnos: {p.turnos} · Comisión aprox. {fmt(p.comisionEstimada)}</div>
-            </div>
-          ))}
+          <h3 style={{ fontSize:14, fontWeight:700, marginBottom:12 }}>Rendimiento y comisiones por especialista</h3>
+          {porProf.length === 0
+            ? <p style={{ fontSize:13, color:C.muted }}>No hay especialistas con turnos atendidos en esta clínica.</p>
+            : porProf.map(p => (
+                <div key={p.id} style={{ padding:"10px 0", borderBottom:`1px solid ${C.subtle}`, fontSize:13 }}>
+                  <div style={{ fontWeight:700 }}>{p.nombre} <span style={{ color:C.muted, fontWeight:500 }}>{p.comisionPct}%</span></div>
+                  <div style={{ fontSize:12, color:C.muted }}>Turnos: {p.turnos} · Facturado {fmt(p.facturacion)} · Comisión {fmt(p.comision)}</div>
+                </div>
+              ))}
         </div>
       </div>
     </div>
@@ -7704,7 +10601,7 @@ function FaceCroquisTechnicalSvg({ withDimmedMask = false, bottomHint = null, st
  */
 const SHOW_FACE_CROQUIS_LIVE = false
 
-function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clinicNombre, sessionEmail, onConsentSaved }) {
+function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clinicNombre, sessionEmail, onConsentSaved, onPersist }) {
   const narrow = useMediaQuery("(max-width: 640px)")
   const { clinicId, turnoId } = ctx
   const bumped = useRef(false)
@@ -7720,6 +10617,15 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const [savingNuevoServicio, setSavingNuevoServicio] = useState(false)
   const [formNuevoServicio, setFormNuevoServicio] = useState({ nombre:"", cat:"clinico", precio:"", duracion:"30" })
   const [qty, setQty] = useState({})
+  /** Cantidad real usada por material vinculado al servicio (soporta fracciones: 0.5, 1.5, etc.). */
+  const [qtyReal, setQtyReal] = useState({})
+  /** Fotos de insumos usados + análisis IA por sesión. */
+  const [fotosInsumos, setFotosInsumos] = useState([])
+  const [insumoCamOpen, setInsumoCamOpen] = useState(false)
+  const [insumoCamBusy, setInsumoCamBusy] = useState(false)
+  const insumoFotoInputRef = useRef(null)
+  const insumoCamVideoRef = useRef(null)
+  const insumoCamStreamRef = useRef(null)
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const fotoInputRef = useRef(null)
@@ -7733,6 +10639,10 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const [faceAnalyzing, setFaceAnalyzing] = useState(false)
   const [faceResult, setFaceResult] = useState(null)
   const [faceError, setFaceError] = useState("")
+  const [treatmentPlan, setTreatmentPlan] = useState(null)
+  const [treatmentPreviewImage, setTreatmentPreviewImage] = useState(null)
+  const [treatmentPreviewLoading, setTreatmentPreviewLoading] = useState(false)
+  const [treatmentPreviewError, setTreatmentPreviewError] = useState("")
   const [camaraEncendida, setCamaraEncendida] = useState(false)
   /** MediaPipe Face Mesh en vivo (face-proportion-overlay). */
   const [faceMeshStatus, setFaceMeshStatus] = useState("idle")
@@ -7771,15 +10681,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const [faceOcrLoading, setFaceOcrLoading] = useState(false)
   const [faceOcrText, setFaceOcrText] = useState("")
   const [faceOcrErr, setFaceOcrErr] = useState("")
-  const [faceDfLoading, setFaceDfLoading] = useState(false)
-  const [faceDfResult, setFaceDfResult] = useState(null)
-  const [faceDfErr, setFaceDfErr] = useState("")
-  const [faceDfLiveEnabled, setFaceDfLiveEnabled] = useState(false)
-  const [faceDfLiveTick, setFaceDfLiveTick] = useState(0)
-  const [faceDfWorkerStatus, setFaceDfWorkerStatus] = useState({ polling: false })
-  const faceDfLiveBusyRef = useRef(false)
-  const faceDfLiveTimerRef = useRef(0)
-  const runFaceDeepfaceRef = useRef(null)
   const [docDictadoTexto, setDocDictadoTexto] = useState("")
   const [docEscuchando, setDocEscuchando] = useState(false)
   const [docGrabando, setDocGrabando] = useState(false)
@@ -7848,6 +10749,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     setFaceTripleShot({ front: null, profileLeft: null, profileRight: null })
     setFacePreview(null)
     setFotoFichaGuardada(false)
+    setQtyReal({})
+    setFotosInsumos([])
     setWizardFase("veredicto")
     setTextoResultado("")
     resultadoDictadoRef.current = ""
@@ -7875,6 +10778,19 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         setServiciosOrdenIds([+b.servicioSel])
       }
       if (b.qty && typeof b.qty === "object") setQty(b.qty)
+      if (b.qtyReal && typeof b.qtyReal === "object") setQtyReal(b.qtyReal)
+      if (Array.isArray(b.fotosInsumos) && b.fotosInsumos.length) {
+        setFotosInsumos(b.fotosInsumos.map(f => ({
+          id: f.id || Date.now() + Math.random(),
+          url: f.url || null,
+          preview: f.url || null,
+          estado: f.estado || (f.analisis ? "ok" : "pendiente"),
+          analisis: f.analisis || null,
+          error: f.error || null,
+          aplicado: f.aplicado !== false,
+          creado: f.creado || null,
+        })))
+      }
       if (b.fotoSesionFase === "antes" || b.fotoSesionFase === "despues") setFotoSesionFase(b.fotoSesionFase)
       if (typeof b.despuesTripleCompleto === "boolean") setDespuesTripleCompleto(b.despuesTripleCompleto)
       if (typeof b.textoResultado === "string") setTextoResultado(b.textoResultado)
@@ -7889,6 +10805,20 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     if (wizardFase === "registro") setFotoSesionFase("antes")
     if (wizardFase === "resultado") setFotoSesionFase("despues")
   }, [wizardFase, usarTripleSesionMedica])
+
+  // Pre-populate qtyReal with base service quantities when entering the "orden" step
+  useEffect(() => {
+    if (wizardFase !== "orden") return
+    const base = turno?.consumoBaseStock || {}
+    if (Object.keys(base).length === 0) return
+    setQtyReal(prev => {
+      const next = { ...prev }
+      for (const [k, v] of Object.entries(base)) {
+        if (next[k] === undefined) next[k] = v
+      }
+      return next
+    })
+  }, [wizardFase, turno?.consumoBaseStock])
 
   useEffect(() => {
     if (!annotActive) return
@@ -8060,6 +10990,11 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           const j = await r.json().catch(() => null)
           console.warn("marcar-paciente-area-medica:", j?.error || r.status)
         }
+        if (Object.keys(qtyBase).length) {
+          const stockList = data.clinics[clinicId]?.stock || []
+          const resStock = await persistirDeltaStockEnSupabase({ clinic: clinicId, stockList, deltaMap: qtyBase })
+          if (!resStock.ok) console.warn("No se pudo descontar stock base en BD:", resStock.error)
+        }
       })()
     }
     setData(d => ({
@@ -8100,7 +11035,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     setCamaraEncendida(false)
     setCamaraFullscreen(false)
     setFaceRearCamera(false)
-    setFaceDfLiveEnabled(false)
     setFaceOverlayLiveMirror(true)
     if (!preserveTriple && usarTripleSesionMedica && faceShotIndex < 3) {
       faceTripleRef.current = { front: null, profileLeft: null, profileRight: null }
@@ -8166,8 +11100,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   }, [])
 
   /**
-   * Análisis combinado real: DeepFace (local) + OpenAI Vision (clínico-estético).
-   * Llama /api/face-analysis/full y guarda el JSON crudo en faceResult.
+   * Análisis clínico-estético del rostro (OpenAI Vision vía backend).
    */
   const ejecutarAnalisisReal = useCallback(async (opts = {}) => {
     const background = opts.background === true
@@ -8196,7 +11129,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       setFaceResult({
         _real: true,
         _ts: Date.now(),
-        deepface: j.deepface || null,
         clinico: j.clinico || null,
         clinicoError: j.clinicoError || null,
       })
@@ -8217,51 +11149,74 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     void ejecutarAnalisisReal({ background: false })
   }
 
-  /** Loop en vivo combinado: OpenAI cada ~12 s mientras DeepFace en vivo esté activo. */
-  const faceFullLiveTimerRef = useRef(0)
-  const faceFullLiveBusyRef = useRef(false)
   useEffect(() => {
-    if (!faceDfLiveEnabled || !camaraEncendida) {
-      if (faceFullLiveTimerRef.current) {
-        window.clearTimeout(faceFullLiveTimerRef.current)
-        faceFullLiveTimerRef.current = 0
-      }
+    setTreatmentPlan(null)
+    setTreatmentPreviewImage(null)
+    setTreatmentPreviewError("")
+  }, [facePreview])
+
+  const generarPreviewTratamiento = async () => {
+    if (!facePreview) {
+      setTreatmentPreviewError("Capturá o elegí una foto primero.")
       return
     }
-    let cancelled = false
-    const loop = async () => {
-      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
-      if (!faceFullLiveBusyRef.current) {
-        faceFullLiveBusyRef.current = true
-        try { await ejecutarAnalisisRealRef.current?.({ background: true }) }
-        catch { /* tolerado */ }
-        finally { faceFullLiveBusyRef.current = false }
-      }
-      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
-      faceFullLiveTimerRef.current = window.setTimeout(loop, 12000)
+    const tratamiento = [protocolo, evaluacion, ...(Array.isArray(tratamientosIA) ? tratamientosIA : [])]
+      .map(x => String(x || "").trim())
+      .filter(Boolean)
+      .join(". ")
+    if (!tratamiento) {
+      setTreatmentPreviewError("Escribí el protocolo o la evaluación del tratamiento primero.")
+      return
     }
-    faceFullLiveTimerRef.current = window.setTimeout(loop, 5000)
-    return () => {
-      cancelled = true
-      if (faceFullLiveTimerRef.current) {
-        window.clearTimeout(faceFullLiveTimerRef.current)
-        faceFullLiveTimerRef.current = 0
+    const catTurno = data?.turnos?.find(t => String(t.id) === String(turnoId))?.cat
+    const zona = catTurno === "corporal" ? "corporal" : "facial"
+    const b64 = dataUrlToBase64(facePreview)
+    const mime = String(facePreview).startsWith("data:image/png") ? "image/png" : "image/jpeg"
+    setTreatmentPreviewLoading(true)
+    setTreatmentPreviewError("")
+    setTreatmentPlan(null)
+    setTreatmentPreviewImage(null)
+    try {
+      const jPlan = await callTreatmentPreview(b64, { tratamiento, zona, mime })
+      if (!jPlan?.ok || !jPlan?.plan) throw new Error(jPlan?.error || "No se pudo generar el plan clínico")
+      setTreatmentPlan(jPlan.plan)
+      const zonas = jPlan.plan?.zonasMarcado || []
+      if (!zonas.length) return
+      const maskB64 = await buildTreatmentMaskBase64(facePreview, jPlan.plan)
+      const jRender = await callTreatmentPreview(b64, {
+        tratamiento,
+        zona,
+        mime,
+        mask_base64: maskB64,
+        plan: jPlan.plan,
+        render: true,
+      })
+      if (!jRender?.ok) throw new Error(jRender?.error || "Error al renderizar preview")
+      const prev = jRender.preview
+      if (prev?.image_base64) {
+        setTreatmentPreviewImage(`data:${prev.mime || "image/png"};base64,${prev.image_base64}`)
+      } else if (prev?.image_url) {
+        setTreatmentPreviewImage(prev.image_url)
+      } else if (jRender.previewError) {
+        setTreatmentPreviewError(`Plan listo. Preview en zonas: ${jRender.previewError}`)
       }
+    } catch (e) {
+      setTreatmentPreviewError(String(e?.message || e))
+    } finally {
+      setTreatmentPreviewLoading(false)
     }
-  }, [faceDfLiveEnabled, camaraEncendida])
+  }
 
   /** Volcado automático del último análisis IA al protocolo de la sesión (idempotente por marca). */
   const lastAutoInsertRef = useRef("")
   useEffect(() => {
     if (!faceResult?._real || !faceResult?.clinico) return
     const c = faceResult.clinico
-    const df = faceResult.deepface || {}
     const recs = Array.isArray(c.recomendaciones) ? c.recomendaciones.filter(Boolean) : []
     const arrugas = Array.isArray(c.arrugas) ? c.arrugas.filter(Boolean) : []
     const alertas = Array.isArray(c.alertas) ? c.alertas.filter(Boolean) : []
     const texto =
       `\n\n[Análisis IA rostro — ${new Date(faceResult._ts || Date.now()).toLocaleString("es-ES")}]\n` +
-      `DeepFace: edad ~${df.age ?? "—"}, ${df.dominant_gender ?? "—"}, ${df.dominant_emotion ?? "—"}${df.dominant_race ? `, ${df.dominant_race}` : ""}.\n` +
       `Piel: ${c.tipoPiel || "—"} · fototipo ${c.fototipo || "—"} · hidratación ${c.hidratacion || "—"} · luminosidad ${c.luminosidad || "—"}.\n` +
       (c.simetria ? `Simetría: ${c.simetria}.\n` : "") +
       (arrugas.length ? `Arrugas: ${arrugas.join(", ")}.\n` : "") +
@@ -8425,120 +11380,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     }
   }
 
-  const runFaceDeepface = async (opts = {}) => {
-    const background = opts.background === true
-    if (faceDfLiveBusyRef.current) return false
-    faceDfLiveBusyRef.current = true
-    if (!background) {
-      setFaceDfErr("")
-      setFaceDfResult(null)
-    }
-    setFaceDfLoading(true)
-    try {
-      const b64 = await grabFaceFrameBase64Async(
-        background ? { maxWidth: 512, quality: 0.78 } : {},
-      )
-      if (!b64) {
-        setFaceDfErr("No hay imagen: abrí la cámara o elegí una foto.")
-        return false
-      }
-      const r = await fetch(FACE_ANALYZE_URL, {
-        method: "POST",
-        headers: faceRemoteHeaders(),
-        body: JSON.stringify({ image_base64: b64 }),
-      })
-      const j = await r.json().catch(() => null)
-      if (!r.ok) {
-        const msg = j?.error || "Error DeepFace"
-        if (background) {
-          setFaceDfErr(msg)
-        } else {
-          throw new Error(msg)
-        }
-        return false
-      }
-      if (j && j.ok && j.face_found === false) {
-        // en vivo: no es error, sólo "no hay cara ahora"
-        if (background) {
-          setFaceDfErr("Buscando rostro… acercate y mirá a la cámara")
-        } else {
-          setFaceDfErr("No se detectó rostro (acercate, luz frontal o mirá a la cámara).")
-        }
-        if (background) setFaceDfLiveTick(t => t + 1)
-        return true
-      }
-      setFaceDfErr("")
-      setFaceDfResult(j)
-      if (background) setFaceDfLiveTick(t => t + 1)
-      // Encadenar el análisis clínico-estético (OpenAI Vision) cuando el usuario
-      // pidió DeepFace de forma manual. Así, además de los atributos crudos,
-      // recibe un diagnóstico interpretado (tipo de piel, simetrías, recomendaciones…).
-      if (!background) {
-        void ejecutarAnalisisRealRef.current?.({ background: false })
-      }
-      return true
-    } catch (e) {
-      setFaceDfErr(String(e?.message || e))
-      return false
-    } finally {
-      setFaceDfLoading(false)
-      faceDfLiveBusyRef.current = false
-    }
-  }
-
-  useEffect(() => {
-    runFaceDeepfaceRef.current = runFaceDeepface
-  }, [runFaceDeepface])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!faceDfLiveEnabled) {
-      setFaceDfWorkerStatus(s => ({ ...s, polling: false }))
-      return () => {}
-    }
-    setFaceDfWorkerStatus(s => ({ ...s, polling: true }))
-    const poll = async () => {
-      if (cancelled) return
-      try {
-        const r = await fetch(FACE_STATUS_URL)
-        if (r.ok) {
-          const j = await r.json()
-          setFaceDfWorkerStatus({ polling: true, ...j })
-        }
-      } catch { /* silencioso: el endpoint puede no existir en producción */ }
-      if (!cancelled) window.setTimeout(poll, 1500)
-    }
-    poll()
-    return () => {
-      cancelled = true
-    }
-  }, [faceDfLiveEnabled])
-
-  useEffect(() => {
-    if (!faceDfLiveEnabled || !camaraEncendida) {
-      if (faceDfLiveTimerRef.current) {
-        window.clearTimeout(faceDfLiveTimerRef.current)
-        faceDfLiveTimerRef.current = 0
-      }
-      return
-    }
-    let cancelled = false
-    const loop = async () => {
-      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
-      await runFaceDeepfaceRef.current?.({ background: true })
-      if (cancelled || !faceDfLiveEnabled || !camaraEncendida) return
-      faceDfLiveTimerRef.current = window.setTimeout(loop, 900)
-    }
-    loop()
-    return () => {
-      cancelled = true
-      if (faceDfLiveTimerRef.current) {
-        window.clearTimeout(faceDfLiveTimerRef.current)
-        faceDfLiveTimerRef.current = 0
-      }
-    }
-  }, [faceDfLiveEnabled, camaraEncendida])
-
   const analizarRostroConIA = async (dataUrl) => {
     setFaceLandmarksLoading(true)
     setFaceLandmarks(null)
@@ -8548,11 +11389,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: dataUrl }),
       })
-      const j = await r.json()
+      if (!r.ok) { console.warn("[area-medica] face-landmarks no disponible:", r.status); return }
+      const j = await r.json().catch(() => null)
       if (j?.found && j?.landmarks) {
         setFaceLandmarks(j.landmarks)
       }
-    } catch { /* silently fail — guide just won't appear */ }
+    } catch (e) { console.warn("[area-medica] face-landmarks falló:", e?.message || e) /* guía opcional: no bloquea */ }
     finally { setFaceLandmarksLoading(false) }
   }
 
@@ -9011,13 +11853,194 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         const next = { ...prev }
         for (const row of out.insumos) {
           const sid = +row.stockId
-          const c = Math.max(0, parseInt(row.cantidad, 10) || 0)
+          const c = Math.max(0, parseFloat(row.cantidad) || 0)
           if (stock.some(s => s.id === sid) && c > 0) next[sid] = c
         }
         return next
       })
     }
   }
+
+  const aplicarAnalisisInsumoFoto = useCallback((analisis, { materialesBaseIds, consumoBase, acumular = true } = {}) => {
+    if (!analisis || !Array.isArray(analisis.articulos)) return { lineas: [], idsBase: [], idsExtra: [] }
+    const idsBaseSet = new Set(materialesBaseIds || [])
+    const baseMap = consumoBase || {}
+    const lineas = []
+    const idsBase = []
+    const idsExtra = []
+    for (const art of analisis.articulos) {
+      const sid = +art.stockId
+      const c = Math.max(0, parseFloat(art.cantidad) || 0)
+      if (!sid || !stock.some(s => s.id === sid) || c <= 0) continue
+      const nombre = art.nombreDetectado || stock.find(s => s.id === sid)?.nombre || `#${sid}`
+      const esBase = idsBaseSet.has(sid) || baseMap[sid] > 0
+      if (esBase) {
+        idsBase.push(sid)
+        setQtyReal(prev => {
+          const prevVal = prev[sid]
+          const nextVal = acumular && prevVal != null ? (+prevVal || 0) + c : c
+          return { ...prev, [sid]: nextVal }
+        })
+      } else {
+        idsExtra.push(sid)
+        setQty(prev => {
+          const prevVal = prev[sid]
+          const nextVal = acumular && prevVal != null ? (+prevVal || 0) + c : c
+          return { ...prev, [sid]: nextVal }
+        })
+      }
+      const loteTxt = art.lote ? ` · lote ${art.lote}` : ""
+      const cadTxt = art.caducidad ? ` · cad. ${art.caducidad}` : ""
+      lineas.push(`${nombre} ×${c}${art.unidad ? ` ${art.unidad}` : ""}${loteTxt}${cadTxt}`)
+    }
+    if (lineas.length) {
+      setNotas(prev => {
+        const bloque = `[Insumo foto IA] ${lineas.join("; ")}`
+        return prev?.includes(bloque) ? prev : [String(prev || "").trim(), bloque].filter(Boolean).join("\n")
+      })
+    }
+    return { lineas, idsBase, idsExtra }
+  }, [stock])
+
+  const guardarFotoInsumoEnFicha = useCallback(async (fotoId, url, analisis) => {
+    if (!pacienteIdSesion || !url) return
+    const arts = Array.isArray(analisis?.articulos) ? analisis.articulos : []
+    const resumen = arts.length
+      ? arts.map(a => `${a.nombreDetectado || stock.find(s => s.id === +a.stockId)?.nombre || "Insumo"} ×${a.cantidad || 1}${a.lote ? ` lote ${a.lote}` : ""}`).join("; ")
+      : (analisis?.descripcionGeneral || "Insumo registrado en sesión")
+    const pacienteActual = (data.pacientes || []).find(p => +p.id === +pacienteIdSesion)
+    if (!pacienteActual) return
+    const prevFotos = Array.isArray(pacienteActual.fotos) ? pacienteActual.fotos : []
+    const nid = prevFotos.length ? Math.max(...prevFotos.map(f => f.id || 0)) + 1 : 1
+    const nuevaFoto = {
+      id: nid,
+      tipo: "insumo_usado",
+      url,
+      fecha: TODAY,
+      nota: resumen.slice(0, 400),
+      turnoId: turnoId ?? null,
+      insumoFotoId: fotoId,
+      analisis: arts.length ? arts.map(a => ({
+        stockId: a.stockId,
+        cantidad: a.cantidad,
+        lote: a.lote,
+        confianza: a.confianza,
+      })) : null,
+    }
+    const nuevasFotos = [...prevFotos, nuevaFoto]
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      const { error } = await supabase.from("clientes").update({ fotos: nuevasFotos }).eq("id", pacienteIdSesion)
+      if (error) console.warn("Foto insumo en ficha:", error.message)
+    }
+    setData(d => ({
+      ...d,
+      pacientes: (d.pacientes || []).map(p =>
+        +p.id === +pacienteIdSesion ? { ...p, fotos: nuevasFotos } : p
+      ),
+    }))
+  }, [pacienteIdSesion, data.pacientes, stock, turnoId, setData])
+
+  const procesarFotoInsumoIA = useCallback(async (fotoId, dataUrl) => {
+    if (!dataUrl) return
+    setFotosInsumos(prev => prev.map(f => f.id === fotoId ? { ...f, estado: "procesando", error: null } : f))
+    try {
+      let urlPersist = null
+      if (String(dataUrl).startsWith("data:image/")) {
+        urlPersist = await uploadImageDataUrl(dataUrl, "insumos")
+      } else {
+        urlPersist = dataUrl
+      }
+      const serviciosCtx = serviciosOrdenIds.map(id => data.servicios.find(s => s.id === id)).filter(Boolean)
+      const materialesBaseIds = [...new Set(serviciosCtx.flatMap(s => materialesStockIdsDelServicio(s)))]
+      const analisis = await procesarInsumoFotoConOpenAI(dataUrl, stock, serviciosCtx, protocolo)
+      aplicarAnalisisInsumoFoto(analisis, {
+        materialesBaseIds,
+        consumoBase: turno?.consumoBaseStock || {},
+      })
+      await guardarFotoInsumoEnFicha(fotoId, urlPersist, analisis)
+      setFotosInsumos(prev => prev.map(f => f.id === fotoId ? {
+        ...f,
+        url: urlPersist,
+        preview: urlPersist,
+        estado: "ok",
+        analisis,
+        aplicado: true,
+        error: null,
+      } : f))
+    } catch (e) {
+      setFotosInsumos(prev => prev.map(f => f.id === fotoId ? {
+        ...f,
+        estado: "error",
+        error: String(e?.message || e),
+      } : f))
+    }
+  }, [stock, serviciosOrdenIds, data.servicios, protocolo, turno?.consumoBaseStock, aplicarAnalisisInsumoFoto, guardarFotoInsumoEnFicha])
+
+  const registrarFotoInsumo = useCallback(async (dataUrl) => {
+    if (!dataUrl) return
+    const id = Date.now() + Math.floor(Math.random() * 1000)
+    setFotosInsumos(prev => [...prev, {
+      id,
+      preview: dataUrl,
+      url: null,
+      estado: "pendiente",
+      analisis: null,
+      error: null,
+      aplicado: false,
+      creado: new Date().toISOString(),
+    }])
+    await procesarFotoInsumoIA(id, dataUrl)
+  }, [procesarFotoInsumoIA])
+
+  const stopInsumoCam = useCallback(() => {
+    try { insumoCamStreamRef.current?.getTracks?.().forEach(t => t.stop()) } catch { /* ignore */ }
+    insumoCamStreamRef.current = null
+    if (insumoCamVideoRef.current) insumoCamVideoRef.current.srcObject = null
+    setInsumoCamOpen(false)
+    setInsumoCamBusy(false)
+  }, [])
+
+  const startInsumoCam = useCallback(async () => {
+    setInsumoCamBusy(true)
+    try {
+      const stream = await getMedicalAreaCameraStream()
+      insumoCamStreamRef.current = stream
+      setInsumoCamOpen(true)
+      requestAnimationFrame(() => {
+        if (insumoCamVideoRef.current) insumoCamVideoRef.current.srcObject = stream
+      })
+    } catch (e) {
+      alert("No se pudo abrir la cámara: " + String(e?.message || e))
+    } finally {
+      setInsumoCamBusy(false)
+    }
+  }, [])
+
+  const capturarFotoInsumoCam = async () => {
+    const v = insumoCamVideoRef.current
+    if (!v?.videoWidth) return
+    const canvas = document.createElement("canvas")
+    canvas.width = v.videoWidth
+    canvas.height = v.videoHeight
+    canvas.getContext("2d").drawImage(v, 0, 0)
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.88)
+    stopInsumoCam()
+    await registrarFotoInsumo(dataUrl)
+  }
+
+  const onInsumoFotoArchivo = async e => {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file) return
+    try {
+      const dataUrl = await compressImageFileToDataUrl(file)
+      if (dataUrl) await registrarFotoInsumo(dataUrl)
+    } catch (err) {
+      alert(String(err?.message || err))
+    }
+  }
+
+  useEffect(() => () => stopInsumoCam(), [stopInsumoCam])
 
   const aplicarDoctorIA = async textoRaw => {
     const texto = String(textoRaw || "").trim()
@@ -9143,7 +12166,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       const name = e?.name || ""
       const msg =
         e?.message === "INSECURE_CONTEXT_MIC"
-          ? "Estás en HTTP por IP: el teléfono bloquea el micrófono. Activá VITE_DEV_HTTPS=true en .env, reiniciá npm run dev y abrí https://TU_IP:5173 (aceptá el certificado en el móvil)."
+          ? "Estás en HTTP por IP: el teléfono bloquea el micrófono. Activá VITE_DEV_HTTPS=true en .env, reiniciá npm run dev y abrí https://TU_IP:3000 (aceptá el certificado en el móvil)."
           : e?.message === "NO_GET_USER_MEDIA"
             ? "No se puede usar el micrófono desde esta página."
             : name === "NotAllowedError" || name === "PermissionDeniedError"
@@ -9554,6 +12577,16 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       alergiasIA,
       tratamientosIA,
       qty,
+      qtyReal,
+      fotosInsumos: fotosInsumos.map(f => ({
+        id: f.id,
+        url: f.url,
+        estado: f.estado,
+        analisis: f.analisis,
+        error: f.error,
+        aplicado: f.aplicado,
+        creado: f.creado,
+      })),
       fotoSesionFase,
       despuesTripleCompleto,
       textoResultado,
@@ -9570,6 +12603,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       alergiasIA,
       tratamientosIA,
       qty,
+      qtyReal,
+      fotosInsumos,
       fotoSesionFase,
       despuesTripleCompleto,
       textoResultado,
@@ -9646,22 +12681,95 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         }
         const turnoActualDb = data.clinics[clinicId].turnos.find(t => t.id === turnoId) || turno
         const qtyBaseDb = turnoActualDb?.consumoBaseStock || {}
-        const qtyTotalDb = mergeQtyMaps(qtyBaseDb, qty)
-        const detalleInsumos = Object.entries(qtyTotalDb).map(([k, v]) => {
+        // Use real quantities for base materials in the log
+        const qtyForLogDb = { ...qty }
+        for (const [k, baseAmt] of Object.entries(qtyBaseDb)) {
+          const id = +k
+          const real = qtyReal[id] !== undefined ? Math.max(0, +qtyReal[id] || 0) : baseAmt
+          qtyForLogDb[id] = real + (qty[id] || 0)
+        }
+        const detalleInsumos = Object.entries(qtyForLogDb).map(([k, v]) => {
           const s = (data.clinics[clinicId]?.stock || []).find(x => x.id === +k)
           return { stockId: +k, nombre: s?.nombre || "", qty: v, costoUnit: +(s?.costo || 0) }
         }).filter(x => x.qty > 0)
         const montoInsumos = detalleInsumos.reduce((a, x) => a + x.costoUnit * x.qty, 0)
+        const qtyPlanificado = qtyMapFromServicios(srvsFact)
+        const deltaStock = calcularDeltaStockAtencion({
+          qtyBaseInicial: qtyBaseDb,
+          qtyPlanificado,
+          qtyExtras: qty,
+          qtyReal,
+        })
+        if (Object.keys(deltaStock).length) {
+          const stockList = data.clinics[clinicId]?.stock || []
+          const resStock = await persistirDeltaStockEnSupabase({ clinic: clinicId, stockList, deltaMap: deltaStock })
+          if (!resStock.ok) alert("Enviado a cobro, pero no se pudo actualizar el stock en BD: " + (resStock.error || ""))
+        }
         await supabase.from("alertas_cobro").update({
           monto_servicio: montoServiciosSum,
           monto_insumos: montoInsumos,
           monto_total: montoServiciosSum + montoInsumos,
           insumos: detalleInsumos,
         }).eq("turno_id", turno.id)
+        const pacienteIdFinal = ensPostAtencion.clienteId || turno.pacienteId
+        if (pacienteIdFinal) {
+          const detalleHist = buildDetalleHistorialAtencion({
+            evaluacionPrevia: evaluacion,
+            resultadoSesion: textoResultado,
+            nombresServicios: nombresFact,
+            protocolo,
+            detalleInsumos: detalleInsumos.map(x => ({ nombre: x.nombre, cantidad: x.qty, unidad: "" })),
+            notas,
+          })
+          const resumenNotas = [`[${TODAY}] ${nombresFact}`]
+          if (String(motivoConsultaIA || "").trim()) resumenNotas.push(`Motivo: ${String(motivoConsultaIA).trim()}`)
+          const persist = await persistirAtencionEnSupabase({
+            pacienteId: pacienteIdFinal,
+            turno,
+            nombresServicios: nombresFact,
+            detalleHist,
+            nombreProfesional,
+            notas,
+            protocolo,
+            alergiasNuevas: [...(Array.isArray(alergiasIA) ? alergiasIA : []), ...((() => {
+              const out = []
+              const lines = `${motivoConsultaIA}\n${evaluacion}\n${protocolo}\n${textoResultado}\n${notas}`.split(/\n+/)
+              for (const line of lines) {
+                const m = line.match(/alergias?\s*:\s*(.+)/i)
+                if (m?.[1]) for (const item of m[1].split(/[;,]/)) { const x = item.trim(); if (x) out.push(x) }
+              }
+              return out
+            })())],
+            tratamientosNuevos: [...idsOrdenValidos.map(id => data.servicios.find(s => s.id === id)?.nombre).filter(Boolean), ...(Array.isArray(tratamientosIA) ? tratamientosIA : [])],
+            notasClinicasAppend: resumenNotas.join(" · "),
+          })
+          if (!persist.ok) alert("Enviado a cobro, pero el historial clínico no se guardó: " + (persist.error || ""))
+          else if (persist.historialRow) {
+            setData(d => ({
+              ...d,
+              historialClinico: [...(d.historialClinico || []), {
+                id: persist.historialRow.id,
+                pacienteId: persist.historialRow.cliente_id,
+                fecha: persist.historialRow.fecha,
+                tipo: persist.historialRow.tipo,
+                titulo: persist.historialRow.titulo,
+                detalle: persist.historialRow.detalle,
+                profesional: persist.historialRow.profesional,
+              }],
+            }))
+          }
+        }
+        await sincronizarAlertaCobroDesdeDb(setData, turno.id)
       }
       const turnoActual = data.clinics[clinicId].turnos.find(t => t.id === turnoId) || turno
       const qtyBase = turnoActual?.consumoBaseStock || {}
-      const qtyTotal = mergeQtyMaps(qtyBase, qty)
+      // Build log-qty using real amounts for base materials
+      const qtyForLog = { ...qty }
+      for (const [k, baseAmt] of Object.entries(qtyBase)) {
+        const id = +k
+        const real = qtyReal[id] !== undefined ? Math.max(0, +qtyReal[id] || 0) : baseAmt
+        qtyForLog[id] = real + (qty[id] || 0)
+      }
       const turnoParaCerrar = ensPostAtencion.clienteId
         ? { ...turno, pacienteId: ensPostAtencion.clienteId }
         : turno
@@ -9673,14 +12781,26 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
             d2 = { ...d, pacientes: [...(d.pacientes || []), pl] }
           }
         }
+        // Ajuste de stock: extras, uso real vs. base y materiales de servicios añadidos
+        const srvsFactLocal = idsOrdenValidos.map(id => data.servicios.find(s => s.id === id)).filter(Boolean)
+        const qtyPlanificadoLocal = qtyMapFromServicios(srvsFactLocal)
+        const baseFromTurno = d2.clinics[clinicId].turnos.find(t => t.id === turnoId)?.consumoBaseStock || {}
+        const deltaStockLocal = calcularDeltaStockAtencion({
+          qtyBaseInicial: baseFromTurno,
+          qtyPlanificado: qtyPlanificadoLocal,
+          qtyExtras: qty,
+          qtyReal,
+        })
+        const stockConAjuste = aplicarDeltaStockLocal(d2.clinics[clinicId].stock, deltaStockLocal)
+        d2 = { ...d2, clinics: { ...d2.clinics, [clinicId]: { ...d2.clinics[clinicId], stock: stockConAjuste } } }
         return cerrarOrdenServicioEnEstado(d2, {
           clinic: clinicId,
           turno: turnoParaCerrar,
           servicioIds: idsOrdenValidos,
           protocolo,
           notas,
-          qty: qtyTotal,
-          qtyDescontar: qty,
+          qty: qtyForLog,
+          qtyDescontar: {},
           nombreProfesional,
           evaluacionPrevia: evaluacion,
           motivoConsultaIA,
@@ -9712,6 +12832,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         })
       }
       onExit()
+      if (onPersist) await onPersist()
     } finally {
       setAllowFinalizeWithoutExtras(false)
       setFinalizando(false)
@@ -9872,6 +12993,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const idsMaterialesSrv = srvsOrden.length
     ? [...new Set(srvsOrden.flatMap(s => materialesStockIdsDelServicio(s)))]
     : []
+  const mostrarPanelInsumosFoto = ["propuesta_ia", "evaluacion", "registro", "resultado", "orden"].includes(wizardFase)
   const stockMaterialesServicio = idsMaterialesSrv.length ? stock.filter(s => idsMaterialesSrv.includes(s.id)) : stock
   const stockOtrosInsumos = idsMaterialesSrv.length ? stock.filter(s => !idsMaterialesSrv.includes(s.id)) : []
   const profNombre = profs.find(p => p.id === (turno?.profesionalId || 1))?.nombre || "—"
@@ -9919,6 +13041,62 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       </div>
     </div>
   )
+
+  /** Fila para materiales BASE del servicio: muestra la cantidad planificada y permite ingresar cuánto se usó realmente (acepta decimales). */
+  const filaInsumoBase = s => {
+    const baseQty = (turno?.consumoBaseStock || {})[s.id] ?? 0
+    const realVal = qtyReal[s.id] !== undefined ? qtyReal[s.id] : baseQty
+    const diff = +(realVal ?? baseQty) - baseQty
+    return (
+      <div
+        key={s.id}
+        style={{
+          display:"flex",
+          flexDirection: narrow ? "column" : "row",
+          alignItems: narrow ? "stretch" : "flex-start",
+          justifyContent:"space-between",
+          gap: narrow ? 10 : 12,
+          padding:"12px 6px",
+          borderBottom:`1px solid ${C.subtle}`,
+          fontSize:13,
+          color:C.text,
+        }}
+      >
+        <div style={{ flex:1, minWidth:0, paddingRight: narrow ? 0 : 8 }}>
+          <strong style={{ display:"block", lineHeight:1.35, wordBreak:"break-word" }}>{s.nombre}</strong>
+          <span style={{ color:C.muted, fontSize:11, display:"block", marginTop:4, lineHeight:1.35 }}>
+            Base servicio: <strong>{baseQty} {s.unidad}</strong> · {fmt(s.costo)} c/u · Stock actual: {s.stock} {s.unidad}
+          </span>
+          {diff !== 0 && (
+            <span style={{ fontSize:11, fontWeight:700, color: diff > 0 ? "#DC2626" : "#059669", display:"block", marginTop:2 }}>
+              {diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2)} {s.unidad} vs. base
+            </span>
+          )}
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4, flexShrink:0, width: narrow ? "100%" : "auto" }}>
+          <span style={{ fontSize:10, fontWeight:700, color:"#7c3aed", whiteSpace:"nowrap" }}>Real usado</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step={0.1}
+            style={{
+              ...inp,
+              width: 100,
+              maxWidth: "100%",
+              flex: "0 0 auto",
+              padding: "10px 8px",
+              fontSize: 16,
+              minHeight: 44,
+              borderColor: diff !== 0 ? (diff > 0 ? "#FCA5A5" : "#6EE7B7") : undefined,
+            }}
+            value={realVal}
+            onChange={e => setQtyReal(prev => ({ ...prev, [s.id]: Math.max(0, parseFloat(e.target.value) || 0) }))}
+          />
+        </div>
+      </div>
+    )
+  }
 
   const faceCroquisControls = (
     <div style={{
@@ -10313,6 +13491,124 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           </p>
         </div>
 
+        {mostrarPanelInsumosFoto && (
+          <div key="insumos-foto-ia" className="erp-fadein" style={{
+            ...medCard,
+            marginBottom: 16,
+            border: "1px solid rgba(167,139,250,.35)",
+            background: "linear-gradient(135deg, rgba(250,245,255,.95), rgba(255,255,255,.88))",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center",
+                  background: C.gradient, color: "#fff",
+                  boxShadow: `0 8px 18px -6px ${C.violet}66`,
+                }}>
+                  <Package size={18} strokeWidth={2.4}/>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: C.violet, letterSpacing: "0.08em", textTransform: "uppercase" }}>Inventario en sesión</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Fotografiar insumos usados</div>
+                  <p style={{ fontSize: 12, color: C.muted, margin: "4px 0 0", lineHeight: 1.45, maxWidth: 520 }}>
+                    Sacá foto de cada vial, jeringa o caja al usarlo. La IA identifica el producto, estima cantidad, lee lote si se ve y actualiza stock y notas clínicas.
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Btn type="button" sm onClick={() => void startInsumoCam()} disabled={insumoCamBusy}>
+                  {insumoCamBusy ? <Loader2 size={14} className="erp-spin"/> : <Camera size={14}/>}
+                  {insumoCamBusy ? " Abriendo…" : " Cámara"}
+                </Btn>
+                <Btn type="button" variant="outline" sm onClick={() => insumoFotoInputRef.current?.click()}>
+                  <ImagePlus size={14}/> Galería
+                </Btn>
+                <input ref={insumoFotoInputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={e => void onInsumoFotoArchivo(e)}/>
+              </div>
+            </div>
+            {fotosInsumos.length === 0 ? (
+              <div style={{
+                padding: "18px 16px",
+                borderRadius: 12,
+                border: `1px dashed ${C.border}`,
+                background: "rgba(255,255,255,.7)",
+                fontSize: 13,
+                color: C.muted,
+                textAlign: "center",
+              }}>
+                Aún no hay fotos de insumos. Fotografiá cada artículo al prepararlo o aplicarlo.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {fotosInsumos.map(f => (
+                  <div key={f.id} style={{
+                    display: "grid",
+                    gridTemplateColumns: narrow ? "72px 1fr" : "88px 1fr auto",
+                    gap: 12,
+                    alignItems: "start",
+                    padding: 12,
+                    borderRadius: 12,
+                    border: `1px solid ${f.estado === "error" ? "#fecaca" : f.estado === "ok" ? "#bbf7d0" : C.border}`,
+                    background: "#fff",
+                  }}>
+                    <div style={{ width: narrow ? 72 : 88, height: narrow ? 72 : 88, borderRadius: 10, overflow: "hidden", background: C.subtle, flexShrink: 0 }}>
+                      {f.preview ? (
+                        <img src={f.preview} alt="Insumo" style={{ width: "100%", height: "100%", objectFit: "cover" }}/>
+                      ) : (
+                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Package size={22} color={C.muted}/>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      {f.estado === "procesando" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.violet, fontWeight: 700 }}>
+                          <Loader2 size={16} className="erp-spin"/> Analizando con IA…
+                        </div>
+                      )}
+                      {f.estado === "error" && (
+                        <div style={{ fontSize: 12, color: C.danger, lineHeight: 1.45 }}>{f.error || "Error al procesar"}</div>
+                      )}
+                      {f.estado === "ok" && f.analisis && (
+                        <>
+                          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{f.analisis.descripcionGeneral || "Producto detectado"}</div>
+                          {(f.analisis.articulos || []).map((a, i) => {
+                            const st = stock.find(s => s.id === +a.stockId)
+                            return (
+                              <div key={i} style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                                {st?.nombre || a.nombreDetectado || "Producto"} · ×{a.cantidad}{a.unidad ? ` ${a.unidad}` : ""}
+                                {a.lote ? <span style={{ fontWeight: 500, color: C.muted }}> · Lote {a.lote}</span> : null}
+                                {a.confianza != null ? <span style={{ fontWeight: 600, fontSize: 11, color: C.violet, marginLeft: 6 }}>{Math.round(+a.confianza * 100)}%</span> : null}
+                              </div>
+                            )
+                          })}
+                          {(f.analisis.advertencias || []).length > 0 && (
+                            <div style={{ fontSize: 11, color: "#b45309", marginTop: 6, lineHeight: 1.4 }}>
+                              {(f.analisis.advertencias || []).join(" · ")}
+                            </div>
+                          )}
+                          {f.aplicado && <div style={{ fontSize: 11, color: C.success, marginTop: 6, fontWeight: 700 }}>✓ Stock y notas actualizados</div>}
+                        </>
+                      )}
+                      {f.estado === "pendiente" && <div style={{ fontSize: 12, color: C.muted }}>Pendiente de análisis…</div>}
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {(f.estado === "error" || f.estado === "ok") && (
+                        <Btn type="button" variant="outline" sm onClick={() => void procesarFotoInsumoIA(f.id, f.preview || f.url)}>
+                          <Sparkles size={12}/> Reanalizar
+                        </Btn>
+                      )}
+                      <Btn type="button" variant="outline" sm onClick={() => setFotosInsumos(prev => prev.filter(x => x.id !== f.id))} style={{ borderColor: C.border, color: C.muted }}>
+                        <Trash2 size={12}/>
+                      </Btn>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {wizardFase === "veredicto" && <div key="wiz-veredicto" className="erp-fadein" style={medCard}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
             <div style={{
@@ -10341,7 +13637,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               color:"#991b1b",
               lineHeight:1.5,
             }}>
-              <strong>Micrófono no disponible:</strong> usá HTTPS en el móvil (véase <code style={codeStyle()}>.env</code> y <code style={codeStyle()}>VITE_DEV_HTTPS</code>).
+              <strong>Micrófono no disponible:</strong> activá <code style={codeStyle()}>VITE_DEV_HTTPS=true</code> en <code style={codeStyle()}>.env</code>, reiniciá <code style={codeStyle()}>npm run dev</code> y abrí <strong>https://</strong> con tu IP (puerto 3000). En Safari: «Mostrar detalles» → «visitar este sitio web».
             </div>
           )}
           <div style={{ display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", marginBottom:12 }}>
@@ -10553,7 +13849,6 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 {wizardFase === "registro" ? "Fotos antes" : "Fotos después"}
               </div>
             </div>
-            <Badge type="general">Demo</Badge>
           </div>
           <p style={{ fontSize:12, color:"#94a3b8", marginBottom:12, lineHeight:1.45 }}>
             {wizardFase === "registro" ? (
@@ -10576,6 +13871,29 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               {despuesTripleCompleto && " · Después completo"}
             </div>
           )}
+          {wizardFase === "registro" && usarTripleSesionMedica && fotoSesionFase === "antes"
+            && (!faceTripleShot.front || !faceTripleShot.profileRight || !faceTripleShot.profileLeft)
+            && (
+              <div style={{
+                marginBottom:12,
+                padding:"10px 12px",
+                borderRadius:12,
+                background:"rgba(220,38,38,.12)",
+                border:"1px solid rgba(220,38,38,.4)",
+                display:"flex",
+                alignItems:"center",
+                gap:10,
+                color:"#fca5a5",
+                fontSize:13,
+                fontWeight:700,
+                lineHeight:1.4,
+              }}>
+                <span style={{ fontSize:18, flexShrink:0 }}>📷</span>
+                <span>
+                  Tomá las <strong style={{ color:"#fecaca" }}>3 fotos de antes</strong> (frente, perfil der., perfil izq.) para poder continuar. El especialista <strong style={{ color:"#fecaca" }}>debe registrar las fotos</strong> antes de avanzar al resultado.
+                </span>
+              </div>
+            )}
           {wizardFase === "registro"
             && usarTripleSesionMedica
             && fotoSesionFase === "antes"
@@ -10840,14 +14158,14 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
           )}
 
           <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid rgba(255,255,255,.12)" }}>
-            <div style={{ fontSize:11, fontWeight:800, color:"#a78bfa", marginBottom:8, letterSpacing:"0.06em", textTransform:"uppercase" }}>Texto en imagen (OCR) · atributos faciales (DeepFace)</div>
+            <div style={{ fontSize:11, fontWeight:800, color:"#a78bfa", marginBottom:8, letterSpacing:"0.06em", textTransform:"uppercase" }}>Texto en imagen (OCR) · análisis clínico del rostro (IA)</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
               <Btn
                 className="erp-glass-btn"
                 type="button"
                 variant="outline"
                 onClick={runFaceOcr}
-                disabled={faceOcrLoading || faceDfLoading || (!camaraEncendida && !facePreview)}
+                disabled={faceOcrLoading || faceAnalyzing || (!camaraEncendida && !facePreview)}
                 style={{ background:"linear-gradient(135deg, rgba(167,139,250,.18), rgba(99,102,241,.10))", borderColor:"rgba(167,139,250,.55)", color:"#e9d5ff", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
               >
                 {faceOcrLoading ? <Loader2 size={16} className="erp-spin" /> : <FileText size={16} />} OCR (OpenAI)
@@ -10856,35 +14174,11 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 className="erp-glass-btn"
                 type="button"
                 variant="outline"
-                onClick={runFaceDeepface}
-                disabled={faceOcrLoading || faceDfLoading || (!camaraEncendida && !facePreview)}
+                onClick={ejecutarAnalisisSimulado}
+                disabled={faceOcrLoading || faceAnalyzing || (!camaraEncendida && !facePreview)}
                 style={{ background:"linear-gradient(135deg, rgba(52,211,153,.18), rgba(16,185,129,.10))", borderColor:"rgba(52,211,153,.55)", color:"#a7f3d0", minHeight:42, flex: narrow ? "1 1 100%" : "0 1 auto", justifyContent:"center" }}
               >
-                {faceDfLoading ? <Loader2 size={16} className="erp-spin" /> : <ScanLine size={16} />} DeepFace (Python)
-              </Btn>
-              <Btn
-                className="erp-glass-btn"
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setFaceDfErr("")
-                  setFaceDfLiveTick(0)
-                  setFaceDfLiveEnabled(v => !v)
-                }}
-                disabled={!camaraEncendida}
-                style={{
-                  background: faceDfLiveEnabled
-                    ? "linear-gradient(135deg, rgba(16,185,129,.30), rgba(34,197,94,.18))"
-                    : "linear-gradient(135deg, rgba(148,163,184,.16), rgba(100,116,139,.10))",
-                  borderColor: faceDfLiveEnabled ? "rgba(16,185,129,.75)" : "rgba(148,163,184,.45)",
-                  color: faceDfLiveEnabled ? "#6ee7b7" : "#cbd5e1",
-                  minHeight:42,
-                  flex: narrow ? "1 1 100%" : "0 1 auto",
-                  justifyContent:"center",
-                  boxShadow: faceDfLiveEnabled ? "0 0 18px -4px rgba(16,185,129,.55)" : undefined,
-                }}
-              >
-                {faceDfLiveEnabled ? "Detener DeepFace en vivo" : "DeepFace en vivo"}
+                {faceAnalyzing ? <Loader2 size={16} className="erp-spin" /> : <ScanLine size={16} />} Analizar rostro (IA)
               </Btn>
             </div>
             {!camaraEncendida && !facePreview && (
@@ -10907,35 +14201,10 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 </span>
               </div>
             )}
-            {camaraEncendida && (
-              <div style={{ fontSize:11, color:"#94a3b8", marginTop:8, display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
-                <span>
-                  Estado DeepFace en vivo: <strong style={{ color: faceDfLiveEnabled ? "#6ee7b7" : "#cbd5e1" }}>{faceDfLiveEnabled ? "activo" : "detenido"}</strong>
-                </span>
-                {faceDfLiveEnabled && faceDfWorkerStatus.warming && (
-                  <span style={{ color:"#fbbf24", display:"inline-flex", alignItems:"center", gap:4 }}>
-                    <Loader2 size={11} className="erp-spin" /> calentando modelo…
-                  </span>
-                )}
-                {faceDfLiveEnabled && !faceDfWorkerStatus.warming && faceDfWorkerStatus.ready && (
-                  <span style={{ color:"#86efac" }}>· modelo listo</span>
-                )}
-                {faceDfLiveEnabled && ` · frames: ${faceDfLiveTick}`}
-              </div>
-            )}
             {faceOcrErr && <div style={{ fontSize:12, color:"#fca5a5", marginTop:8 }}>{faceOcrErr}</div>}
             {faceOcrText && (
               <div style={{ marginTop:10, padding:10, borderRadius:10, background:"rgba(0,0,0,.35)", fontSize:12, color:"#e2e8f0", whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
                 <strong style={{ color:"#c4b5fd" }}>OCR:</strong> {faceOcrText}
-              </div>
-            )}
-            {faceDfErr && <div style={{ fontSize:12, color:"#fca5a5", marginTop:8 }}>{faceDfErr}</div>}
-            {faceDfResult?.ok && (
-              <div style={{ marginTop:10, padding:10, borderRadius:10, background:"rgba(0,0,0,.35)", fontSize:12, color:"#e2e8f0", fontFamily:"ui-monospace, monospace" }}>
-                <strong style={{ color:"#6ee7b7" }}>DeepFace:</strong>{" "}
-                edad ~{faceDfResult.age ?? "—"}, {String(faceDfResult.dominant_gender ?? "")}, {String(faceDfResult.dominant_emotion ?? "")}
-                {faceDfResult.dominant_race != null ? `, ${String(faceDfResult.dominant_race)}` : ""}
-                <pre style={{ margin:"8px 0 0", fontSize:11, overflow:"auto", maxHeight:160 }}>{JSON.stringify(faceDfResult, null, 2)}</pre>
               </div>
             )}
           </div>
@@ -10961,24 +14230,13 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               lineHeight:1.5,
             }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, flexWrap:"wrap", gap:8 }}>
-                <div style={{ fontWeight:800, color:"#c4b5fd" }}>Análisis IA del rostro (DeepFace + OpenAI)</div>
+                <div style={{ fontWeight:800, color:"#c4b5fd" }}>Análisis IA del rostro</div>
                 {faceResult._ts && (
                   <div style={{ fontSize:11, color:"#64748b" }}>
                     actualizado {new Date(faceResult._ts).toLocaleTimeString("es-ES")}
                   </div>
                 )}
               </div>
-
-              {faceResult.deepface && (
-                <div style={{ marginBottom:10, padding:"8px 10px", borderRadius:8, background:"rgba(16,185,129,.1)", border:"1px solid rgba(16,185,129,.28)" }}>
-                  <div style={{ fontSize:11, fontWeight:700, color:"#6ee7b7", marginBottom:4 }}>DeepFace (local)</div>
-                  <div>Edad estimada: <strong>{faceResult.deepface.age ?? "—"}</strong> · Género: <strong>{String(faceResult.deepface.dominant_gender ?? "—")}</strong></div>
-                  <div>Emoción: <strong>{String(faceResult.deepface.dominant_emotion ?? "—")}</strong>{faceResult.deepface.dominant_race ? <> · Etnia aprox.: <strong>{String(faceResult.deepface.dominant_race)}</strong></> : null}</div>
-                  {typeof faceResult.deepface.face_confidence === "number" && (
-                    <div style={{ fontSize:11, color:"#94a3b8", marginTop:2 }}>Confianza detección: {(faceResult.deepface.face_confidence * 100).toFixed(0)}%</div>
-                  )}
-                </div>
-              )}
 
               {faceResult.clinico ? (
                 <div style={{ padding:"8px 10px", borderRadius:8, background:"rgba(167,139,250,.1)", border:"1px solid rgba(167,139,250,.28)" }}>
@@ -11025,6 +14283,79 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               </div>
             </div>
           )}
+
+          {facePreview && !camaraEncendida && (
+            <div style={{
+              marginTop:14,
+              padding:14,
+              borderRadius:12,
+              background:"rgba(0,0,0,.35)",
+              border:"1px solid rgba(52,211,153,.25)",
+            }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8, marginBottom:10 }}>
+                <div style={{ fontWeight:800, color:"#6ee7b7", fontSize:13 }}>Plan + preview en zonas (gpt-image-2)</div>
+                <Btn
+                  className="erp-glass-btn"
+                  type="button"
+                  variant="outline"
+                  onClick={() => void generarPreviewTratamiento()}
+                  disabled={treatmentPreviewLoading || faceAnalyzing}
+                  style={{ background:"linear-gradient(135deg, rgba(52,211,153,.18), rgba(16,185,129,.10))", borderColor:"rgba(52,211,153,.55)", color:"#a7f3d0", minHeight:40 }}
+                >
+                  {treatmentPreviewLoading ? <Loader2 size={15} className="erp-spin" /> : <Sparkles size={15} />}
+                  {treatmentPreviewLoading ? " Generando…" : " Generar plan y preview"}
+                </Btn>
+              </div>
+              <div style={{ fontSize:11, color:"#94a3b8", marginBottom:10, lineHeight:1.45 }}>
+                1) Plan clínico con <strong style={{ color:"#cbd5e1" }}>gpt-4o</strong> · 2) Retoque solo en zonas enmascaradas con <strong style={{ color:"#cbd5e1" }}>gpt-image-2</strong> (el resto de la foto no se toca).
+              </div>
+              {treatmentPreviewError && (
+                <div style={{ fontSize:12, color:"#fca5a5", marginBottom:10 }}>{treatmentPreviewError}</div>
+              )}
+              {treatmentPlan && (
+                <div style={{ marginBottom:12, padding:"10px 12px", borderRadius:8, background:"rgba(52,211,153,.08)", border:"1px solid rgba(52,211,153,.22)", fontSize:12, color:"#d1fae5", lineHeight:1.5 }}>
+                  {treatmentPlan.titulo && <div style={{ fontWeight:800, marginBottom:4 }}>{treatmentPlan.titulo}</div>}
+                  {treatmentPlan.expectativaClinica && <div>{treatmentPlan.expectativaClinica}</div>}
+                  {treatmentPlan.notasPaciente && <div style={{ marginTop:6, color:"#a7f3d0", fontStyle:"italic" }}>{treatmentPlan.notasPaciente}</div>}
+                </div>
+              )}
+              <div style={{ display:"grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr 1fr", gap:10 }}>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#94a3b8", marginBottom:6, textTransform:"uppercase", letterSpacing:".04em" }}>Antes</div>
+                  <FotoConPlanTratamiento src={facePreview} alt="Antes" />
+                </div>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#6ee7b7", marginBottom:6, textTransform:"uppercase", letterSpacing:".04em" }}>Zonas del plan</div>
+                  {treatmentPlan ? (
+                    <FotoConPlanTratamiento src={facePreview} plan={treatmentPlan} alt="Zonas del tratamiento" />
+                  ) : (
+                    <div style={{
+                      height:160, borderRadius:10, border:"1px dashed rgba(255,255,255,.2)", display:"flex", alignItems:"center", justifyContent:"center",
+                      fontSize:12, color:"#64748b", padding:12, textAlign:"center", background:"#0f172a",
+                    }}>
+                      {treatmentPreviewLoading ? "Analizando…" : "—"}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#a78bfa", marginBottom:6, textTransform:"uppercase", letterSpacing:".04em" }}>Preview zonas · gpt-image-2</div>
+                  {treatmentPreviewImage ? (
+                    <img src={treatmentPreviewImage} alt="Preview en zonas" style={{ width:"100%", borderRadius:10, border:"1px solid rgba(167,139,250,.35)", maxHeight:280, objectFit:"contain", background:"#0f172a" }} />
+                  ) : (
+                    <div style={{
+                      height:160, borderRadius:10, border:"1px dashed rgba(255,255,255,.2)", display:"flex", alignItems:"center", justifyContent:"center",
+                      fontSize:12, color:"#64748b", padding:12, textAlign:"center", background:"#0f172a",
+                    }}>
+                      {treatmentPreviewLoading ? "gpt-image-2 editando solo zonas…" : "Pulsa «Generar plan y preview»"}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={{ fontSize:10, color:"#64748b", marginTop:10, lineHeight:1.45 }}>
+                {treatmentPlan?.disclaimer || "Planificación clínica orientativa; no sustituye valoración médica presencial."}
+              </div>
+            </div>
+          )}
           <div style={{ marginTop:18, paddingTop:16, borderTop:"1px solid #334155", display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
             {wizardFase === "registro" ? (
               <>
@@ -11033,6 +14364,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
                 </Btn>
                 <Btn
                   type="button"
+                  disabled={usarTripleSesionMedica && (!faceTripleShot.front || !faceTripleShot.profileRight || !faceTripleShot.profileLeft)}
                   onClick={() => {
                     if (usarTripleSesionMedica) {
                       setFotoSesionFase("despues")
@@ -11236,26 +14568,23 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               )}
             </div>
           )}
+          {idsMaterialesSrv.length > 0 && (
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:"#7c3aed", marginBottom:6 }}>
+                Materiales del servicio — ingresá la cantidad real usada
+              </div>
+              <div style={{ border:`1px solid #ddd8fe`, borderRadius:10, padding:10, background:"#faf5ff" }}>
+                {stockMaterialesServicio.map(filaInsumoBase)}
+              </div>
+            </div>
+          )}
           <div>
             <div style={{ fontSize:11, fontWeight:700, color:"#94a3b8", marginBottom:8 }}>
-              {idsMaterialesSrv.length ? `Productos extra sobre materiales base (${srvsOrden.map(s => s.nombre).join(" · ") || "—"})` : `Productos extra (stock C${clinicId})`}
+              {idsMaterialesSrv.length ? `Insumos extra (más allá de los del servicio)` : `Insumos (stock C${clinicId})`}
             </div>
             <div style={{ maxHeight: narrow ? 200 : 220, overflowY:"auto", WebkitOverflowScrolling:"touch", border:`1px solid ${C.border}`, borderRadius:10, padding:10, background:"#fff" }}>
-              {stockMaterialesServicio.map(filaInsumo)}
+              {(idsMaterialesSrv.length ? stockOtrosInsumos : stockMaterialesServicio).map(filaInsumo)}
             </div>
-            {idsMaterialesSrv.length > 0 && stockOtrosInsumos.length > 0 && (
-              <>
-                <Btn type="button" variant="outline" onClick={() => setVerStockCompleto(v => !v)} style={{ marginTop:10, width:"100%", borderColor:C.border, color:C.text, minHeight:40 }}>
-                  {verStockCompleto ? "Ocultar resto del catálogo" : "Ver catálogo completo de insumos"}
-                </Btn>
-                {verStockCompleto && (
-                  <div style={{ marginTop:10, maxHeight: narrow ? 180 : 200, overflowY:"auto", WebkitOverflowScrolling:"touch", border:`1px solid ${C.border}`, borderRadius:10, padding:10, background:"#fafafa" }}>
-                    <div style={{ fontSize:11, fontWeight:700, color:C.muted, marginBottom:8 }}>Otros ítems de stock</div>
-                    {stockOtrosInsumos.map(filaInsumo)}
-                  </div>
-                )}
-              </>
-            )}
           </div>
           <FG label="Notas clínicas" full>
             <textarea style={{ ...inp, minHeight:64, background:"#fff", fontSize:16 }} value={notas} onChange={e => setNotas(e.target.value)} placeholder="Evolución, observaciones…" />
@@ -11893,6 +15222,32 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         </div>,
         document.body
       )}
+      {insumoCamOpen && createPortal(
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 11000,
+          background: "rgba(15,23,42,.92)",
+          display: "flex", flexDirection: "column",
+          padding: "max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ color: "#e9d5ff", fontWeight: 800, fontSize: 16 }}>Foto del insumo usado</div>
+            <button type="button" onClick={stopInsumoCam} style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer" }}><X size={22}/></button>
+          </div>
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+            <video ref={insumoCamVideoRef} autoPlay playsInline muted style={{ width: "100%", maxHeight: "62vh", borderRadius: 16, background: "#000", objectFit: "cover" }}/>
+          </div>
+          <p style={{ color: "#94a3b8", fontSize: 12, textAlign: "center", margin: "12px 0", lineHeight: 1.45 }}>
+            Encuadrá la etiqueta del producto (vial, caja o jeringa). La IA leerá nombre, lote y cantidad.
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Btn variant="outline" onClick={stopInsumoCam} style={{ flex: 1, minHeight: 48, borderColor: "#475569", color: "#e2e8f0" }}>Cancelar</Btn>
+            <Btn onClick={() => void capturarFotoInsumoCam()} style={{ flex: 2, minHeight: 48, background: C.gradient, border: "none", fontWeight: 800 }}>
+              <Camera size={16}/> Capturar y analizar
+            </Btn>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
@@ -11961,18 +15316,18 @@ function DoctorAreaLanding({ clinic, onOpenDemo, demoTurno }) {
           }}>
             <QrCode size={18} strokeWidth={2.4}/>
           </div>
-          <div style={{ fontSize:15, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Demo rápida sin QR</div>
+          <div style={{ fontSize:15, fontWeight:800, color:C.text, letterSpacing:"-0.01em" }}>Apertura rápida sin QR</div>
         </div>
         {demoTurno ? (
           <p style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
-            Paciente de ejemplo en sala: <strong style={{ color:C.text }}>{demoTurno.cliente}</strong> (turno #{demoTurno.id}). Abrí la sesión médica sin escanear.
+            Paciente en sala: <strong style={{ color:C.text }}>{demoTurno.cliente}</strong> (turno #{demoTurno.id}). Abrí la sesión médica sin escanear el QR.
           </p>
         ) : (
-          <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>No hay turnos demo en esta clínica.</p>
+          <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>No hay turnos en sala en esta clínica.</p>
         )}
         <div style={{ display:"flex", flexWrap:"wrap", gap:10 }}>
           <Btn disabled={!demoTurno} onClick={() => demoTurno && onOpenDemo(demoTurno)} style={{ background:C.gradient, border:"none", minHeight:44 }}>
-            <Stethoscope size={14}/> Abrir sesión demo
+            <Stethoscope size={14}/> Abrir sesión médica
           </Btn>
         </div>
         {linkDemo && (
@@ -11986,7 +15341,7 @@ function DoctorAreaLanding({ clinic, onOpenDemo, demoTurno }) {
 }
 
 // ─── ORDEN DE SERVICIO — SALA (especialista) ──────────────────
-function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltro }) {
+function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltro, onPersist }) {
   const [activo, setActivo] = useState(null)
   const [servicioSel, setServicioSel] = useState(null)
   const [protocolo, setProtocolo] = useState("")
@@ -12026,6 +15381,10 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
       if (error) {
         alert(error.message || "No se pudo iniciar la sesión.")
         return
+      }
+      if (Object.keys(qtyBase).length) {
+        const resStock = await persistirDeltaStockEnSupabase({ clinic, stockList: stock, deltaMap: qtyBase })
+        if (!resStock.ok) alert("Sesión iniciada, pero no se pudo descontar el stock en BD: " + (resStock.error || ""))
       }
     }
     setData(d => ({
@@ -12112,10 +15471,70 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           monto_total: montoServicio + montoInsumos,
           insumos: detalleInsumos,
         }).eq("turno_id", turno.id)
+        const pacienteIdFinal = ensPostAtencion.clienteId || turno.pacienteId
+        if (pacienteIdFinal) {
+          const nombresFact = srv?.nombre || turno.servicio || "Servicio"
+          const detalleHist = buildDetalleHistorialAtencion({
+            evaluacionPrevia: "",
+            resultadoSesion: "",
+            nombresServicios: nombresFact,
+            protocolo,
+            detalleInsumos: detalleInsumos.map(x => ({ nombre: x.nombre, cantidad: x.qty, unidad: "" })),
+            notas,
+          })
+          const persist = await persistirAtencionEnSupabase({
+            pacienteId: pacienteIdFinal,
+            turno,
+            nombresServicios: nombresFact,
+            detalleHist,
+            nombreProfesional,
+            notas,
+            protocolo,
+            alergiasNuevas: [],
+            tratamientosNuevos: srv?.nombre ? [srv.nombre] : [],
+            notasClinicasAppend: `[${TODAY}] ${nombresFact}`,
+          })
+          if (!persist.ok) alert("Enviado a cobro, pero el historial clínico no se guardó: " + (persist.error || ""))
+          else if (persist.historialRow) {
+            setData(d => ({
+              ...d,
+              historialClinico: [...(d.historialClinico || []), {
+                id: persist.historialRow.id,
+                pacienteId: persist.historialRow.cliente_id,
+                fecha: persist.historialRow.fecha,
+                tipo: persist.historialRow.tipo,
+                titulo: persist.historialRow.titulo,
+                detalle: persist.historialRow.detalle,
+                profesional: persist.historialRow.profesional,
+              }],
+            }))
+          }
+        }
+        await sincronizarAlertaCobroDesdeDb(setData, turno.id)
+        const deltaStock = calcularDeltaStockAtencion({
+          qtyBaseInicial: qtyBaseDb,
+          qtyPlanificado: qtyMapFromMaterialesServicio(srv),
+          qtyExtras: qty,
+          qtyReal: {},
+        })
+        if (Object.keys(deltaStock).length) {
+          const resStock = await persistirDeltaStockEnSupabase({
+            clinic,
+            stockList: data.clinics[clinic]?.stock || [],
+            deltaMap: deltaStock,
+          })
+          if (!resStock.ok) alert("Atención cerrada, pero no se pudo descontar el stock extra en BD: " + (resStock.error || ""))
+        }
       }
       const turnoActual = data.clinics[clinic].turnos.find(t => t.id === turno.id) || turno
       const qtyBase = turnoActual?.consumoBaseStock || {}
       const qtyTotal = mergeQtyMaps(qtyBase, qty)
+      const deltaStockLocal = calcularDeltaStockAtencion({
+        qtyBaseInicial: qtyBase,
+        qtyPlanificado: qtyMapFromMaterialesServicio(data.servicios.find(s => s.id === sid)),
+        qtyExtras: qty,
+        qtyReal: {},
+      })
       const turnoParaCerrar = ensPostAtencion.clienteId
         ? { ...turno, pacienteId: ensPostAtencion.clienteId }
         : turno
@@ -12127,8 +15546,10 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
             d2 = { ...d, pacientes: [...(d.pacientes || []), pl] }
           }
         }
+        const stockAjustado = aplicarDeltaStockLocal(d2.clinics[clinic].stock, deltaStockLocal)
+        d2 = { ...d2, clinics: { ...d2.clinics, [clinic]: { ...d2.clinics[clinic], stock: stockAjustado } } }
         return cerrarOrdenServicioEnEstado(d2, {
-          clinic, turno: turnoParaCerrar, servicioId: sid, protocolo, notas, qty: qtyTotal, qtyDescontar: qty, nombreProfesional,
+          clinic, turno: turnoParaCerrar, servicioId: sid, protocolo, notas, qty: qtyTotal, qtyDescontar: {}, nombreProfesional,
         })
       })
       setActivo(null)
@@ -12136,6 +15557,7 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
       setProtocolo("")
       setNotas("")
       setQty({})
+      if (onPersist) await onPersist()
     } finally {
       setAllowFinalizeWithoutExtras(false)
       setFinalizando(false)
@@ -12148,12 +15570,6 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
       <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>
         Elegí el <strong>servicio a facturar</strong> (puede diferir del turno agendado), cargá insumos y finalizá: la recepción recibe el ticket con ese importe + consumibles.
       </p>
-      {lista.length > 0 && (
-        <div style={{ background:"linear-gradient(135deg,#EDE9FE,#FDF4FF)", border:`1px solid ${C.violet}33`, borderRadius:12, padding:"12px 16px", marginBottom:18, fontSize:13, color:C.text }}>
-          <strong>Datos de ejemplo:</strong> <em>María González</em> (consulta) y <em>Valentina Ruiz</em> (bótox) están <strong>en sala</strong> para Dra. Ana · Iniciá sesión, cambiá el servicio si querés, cargá p. ej. toxina 1 ampolla + guantes, y finalizá → entrá como recepción y mirá la campana 🔔.
-        </div>
-      )}
-
       {lista.length === 0 ? (
         <div style={{ background:C.card, borderRadius:16, padding:36, textAlign:"center", color:"#94A3B8", fontSize:14 }}>No hay pacientes en sala para esta clínica{profFiltro ? " / tu agenda" : ""}. Desde Agenda, pasá el turno a «A sala».</div>
       ) : (
@@ -12349,7 +15765,7 @@ function TpvVirtualAnimacion({ metodo }) {
   )
 }
 
-function AlertasCobroBell({ data, setData, clinic, role }) {
+function AlertasCobroBell({ data, setData, clinic, role, onPersist }) {
   const [open, setOpen] = useState(false)
   const [cobro, setCobro] = useState(null)
   const [metodo, setMetodo] = useState("tarjeta")
@@ -12373,114 +15789,24 @@ function AlertasCobroBell({ data, setData, clinic, role }) {
 
   if (role !== "recepcionista" && role !== "gerente") return null
 
-  const registrarIngresoCobroRespaldo = async ({ turnoId, montoTotal, metodoPago, paciente }) => {
-    if (!turnoId || !(montoTotal > 0)) return
-    const fecha = TODAY
-    const cliente = paciente || "Paciente"
-    const concepto = `Cobro turno #${turnoId} — ${cliente}`
-    const comprobante = `AUTO-TURNO-${turnoId}`
-
-    if (import.meta.env.VITE_SUPABASE_URL) {
-      try {
-        const { data: tpvExists } = await supabase
-          .from("tpv_movimientos")
-          .select("id")
-          .eq("comprobante", comprobante)
-          .limit(1)
-        if (!tpvExists?.length) {
-          await supabase.from("tpv_movimientos").insert({
-            fecha,
-            clinic_id: clinic,
-            metodo: metodoPago || "efectivo",
-            monto: montoTotal,
-            concepto,
-            comprobante,
-          })
-        }
-      } catch {}
-      try {
-        const { data: clinicExists } = await supabase
-          .from("clinic_movimientos")
-          .select("id")
-          .eq("clinic_id", clinic)
-          .ilike("concepto", `%turno #${turnoId}%`)
-          .limit(1)
-        if (!clinicExists?.length) {
-          await supabase.from("clinic_movimientos").insert({
-            clinic_id: clinic,
-            tipo: "ingreso",
-            fecha,
-            concepto,
-            cat: "servicios",
-            monto: montoTotal,
-          })
-        }
-      } catch {}
-    }
-
-    setData(d => {
-      const tpvMovs = d.tpv?.movimientos || []
-      const clinicMovs = d.clinics[clinic]?.movimientos || []
-      const hasTpv = tpvMovs.some(m => m.comprobante === comprobante)
-      const hasClinic = clinicMovs.some(m => String(m.concepto || "").toLowerCase().includes(`turno #${turnoId}`))
-      const nextTpvId = tpvMovs.length ? Math.max(...tpvMovs.map(m => m.id || 0)) + 1 : 1
-      const nextClinicId = clinicMovs.length ? Math.max(...clinicMovs.map(m => m.id || 0)) + 1 : 1
-      return {
-        ...d,
-        tpv: {
-          ...d.tpv,
-          movimientos: hasTpv
-            ? tpvMovs
-            : [...tpvMovs, { id: nextTpvId, fecha, clinicId: clinic, metodo: metodoPago || "efectivo", monto: montoTotal, concepto, comprobante }],
-        },
-        clinics: {
-          ...d.clinics,
-          [clinic]: {
-            ...d.clinics[clinic],
-            movimientos: hasClinic
-              ? clinicMovs
-              : [...clinicMovs, { id: nextClinicId, tipo: "ingreso", fecha, concepto, cat: "servicios", monto: montoTotal }],
-          },
-        },
-      }
-    })
-  }
-
   const aplicarCobroEnEstado = async () => {
     if (!cobro) return
-    if (import.meta.env.VITE_SUPABASE_URL) {
-      let { error: eTurno } = await supabase
-        .from("turnos")
-        .update({ estado: "finalizado", metodo_pago: metodo })
-        .eq("id", cobro.turnoId)
-      if (eTurno?.message?.includes("metodo_pago")) {
-        ({ error: eTurno } = await supabase.from("turnos").update({ estado: "finalizado" }).eq("id", cobro.turnoId))
-      }
-      if (eTurno) {
-        alert(eTurno.message || "No se pudo cerrar el turno.")
-        return
-      }
-      if (cobro.id && typeof cobro.id === "number") {
-        await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("id", cobro.id)
-      }
-    }
-    await registrarIngresoCobroRespaldo({
+    const turno = (data.clinics[clinic]?.turnos || []).find(t => t.id === cobro.turnoId)
+    const res = await ejecutarCobroTurno({
+      data,
+      setData,
+      clinic,
       turnoId: cobro.turnoId,
+      alertCobro: cobro,
+      turno,
       montoTotal: cobro.montoTotal || 0,
-      metodoPago: metodo,
-      paciente: cobro.paciente,
+      montoServicio: cobro.montoServicio,
+      montoInsumos: cobro.montoInsumos,
+      metodo,
+      onPersist,
     })
-    setData(d => ({
-      ...d,
-      alertasCobro: (d.alertasCobro || []).map(a => a.id === cobro.id ? { ...a, estado: "cobrado", metodoPago: metodo } : a),
-      clinics: {
-        ...d.clinics,
-        [clinic]: {
-          ...d.clinics[clinic],
-          turnos: d.clinics[clinic].turnos.map(t => t.id === cobro.turnoId ? { ...t, estado: "finalizado" } : t),
-        },
-      },
-    }))
+    if (!res.ok && res.reason === "caja_cerrada") return false
+    return res.ok
   }
 
   const cerrarModalCobro = () => {
@@ -12494,7 +15820,11 @@ function AlertasCobroBell({ data, setData, clinic, role }) {
     setCobroPhase("processing")
     const t1 = window.setTimeout(() => {
       void (async () => {
-        await aplicarCobroEnEstado()
+        const ok = await aplicarCobroEnEstado()
+        if (!ok) {
+          setCobroPhase("form")
+          return
+        }
         setCobroPhase("success")
         const t2 = window.setTimeout(() => {
           setCobro(null)
@@ -12769,8 +16099,7 @@ function ConfiguracionCuentas({ onClinicsChanged }) {
       <div>
         <h2 style={{ fontSize:20, fontWeight:700, marginBottom:6 }}>Cuentas y equipo</h2>
         <p style={{ fontSize:13, color:C.muted, lineHeight:1.5 }}>
-          Creá usuarios de <strong>acceso a la app</strong> (Auth). El gerente principal puede crear encargados; el encargado solo puede crear especialistas/recepcionistas de su clínica. Requiere{' '}
-          <code style={codeStyle()}>SUPABASE_SERVICE_ROLE_KEY</code> en <code style={codeStyle()}>.env.local</code> del proyecto y reiniciar <code style={codeStyle()}>npm run dev</code>.
+          Creá usuarios de <strong>acceso a la app</strong> (Auth). El gerente principal puede crear encargados; el encargado solo puede crear especialistas/recepcionistas de su clínica.
         </p>
       </div>
 
@@ -12913,6 +16242,7 @@ const NAV = [
     { id:"tpv",        label:"TPV Virtual",   icon:CreditCard },
   ]},
   { group:"Crecimiento", items:[
+    { id:"leads",      label:"Leads",         icon:Target },
     { id:"marketing",  label:"Marketing",     icon:MessageCircle },
     { id:"reservas",   label:"Reserva online",icon:Globe },
   ]},
@@ -12939,6 +16269,7 @@ const SECTION_PATHS = {
   personal: "/personal",
   bonos: "/bonos",
   tpv: "/tpv",
+  leads: "/leads",
   marketing: "/marketing",
   analytics: "/analytics",
   reservas: "/reservas",
@@ -12965,11 +16296,12 @@ function getPathnameFromSection(section) {
 // ─── ROOT APP ─────────────────────────────────────────────────
 export default function App() {
   const useSupabaseAuth = Boolean(import.meta.env.VITE_SUPABASE_URL)
-  const [session, setSession] = useState(() => loadSession())
-  const [section, setSection] = useState(() => {
-    if (typeof window === "undefined") return "dashboard"
-    return getSectionFromPathname(window.location.pathname)
-  })
+  /** SSR y 1.er frame del cliente coinciden; sessionStorage y la URL se leen en useEffect (cliente). */
+  const [appReady, setAppReady] = useState(false)
+  const [session, setSession] = useState(null)
+  const [section, setSection] = useState("dashboard")
+  const [urlDoctorCtx, setUrlDoctorCtx] = useState(null)
+  const [manualDoctorCtx, setManualDoctorCtx] = useState(null)
   const [clinic,  setClinic]  = useState(1)
   const [clinicOptions, setClinicOptions] = useState([
     { id: 1, nombre: "Clínica 1", modalidad_negocio: "sucursal" },
@@ -13048,16 +16380,17 @@ export default function App() {
       sesiones: +s.sesiones || 1,
       desc: s.descripcion || "",
       materialesStockIds: Array.isArray(s.materiales_articulo_ids) ? s.materiales_articulo_ids : [],
+      materialesCantidades: Array.isArray(s.materiales_cantidades) ? s.materiales_cantidades : [],
     })
     const loadServiciosEmpleadosFallback = async () => {
-      const [{ data: emps }, { data: srvs }, { data: cs }, { data: ts }, { data: pacs }, { data: arts }, { data: apc }, { data: movs }, { data: tpvMovs }, { data: alertasRows }] = await Promise.all([
+      const [{ data: emps }, { data: srvs }, { data: cs }, { data: ts }, { data: pacs }, { data: arts }, { data: apc }, { data: movs }, { data: tpvMovs }, { data: alertasRows }, { data: tpvCajaSesiones }] = await Promise.all([
         supabase
           .from("empleados")
           .select("id, clinic_id, nombre, email, tel, rol, activo, especialidad, comision_pct, color, foto_url, documento, fecha_nacimiento, direccion, fecha_ingreso, contacto_emergencia, tel_emergencia, notas, historial")
           .order("id"),
         supabase
           .from("servicios")
-          .select("id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids")
+          .select("id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids, materiales_cantidades")
           .order("id"),
         supabase
           .from("clinics")
@@ -13085,12 +16418,17 @@ export default function App() {
           .order("id"),
         supabase
           .from("tpv_movimientos")
-          .select("id, fecha, clinic_id, metodo, monto, concepto, comprobante")
+          .select("id, fecha, clinic_id, metodo, monto, concepto, comprobante, tipo, cat_salida, notas")
           .order("id"),
         supabase
           .from("alertas_cobro")
           .select("id, clinic_id, turno_id, cliente, servicio, servicio_id, monto_servicio, monto_insumos, monto_total, insumos, estado, metodo_pago, creado")
           .order("id"),
+        supabase
+          .from("tpv_caja_sesiones")
+          .select("id, clinic_id, fecha, estado, apertura_at, cierre_at, fondo_inicial, conteo_apertura, conteo_cierre_efectivo, cierre_tarjeta, cierre_transferencia, cierre_banco, teorico_efectivo, teorico_tarjeta, teorico_transferencia, diferencia_efectivo, diferencia_tarjeta, diferencia_transferencia, notas_cierre")
+          .order("apertura_at", { ascending: false })
+          .limit(120),
       ])
       const pacIds = (pacs || []).map(p => p.id)
       const { data: hist } = pacIds.length
@@ -13219,8 +16557,12 @@ export default function App() {
             monto: +m.monto || 0,
             concepto: m.concepto || "",
             comprobante: m.comprobante || "",
+            tipo: m.tipo === "salida" ? "salida" : "ingreso",
+            catSalida: m.cat_salida || "",
+            notas: m.notas || "",
           })),
           cierres: prev.tpv?.cierres || [],
+          sesiones: (tpvCajaSesiones || []).map(mapCajaSesionRow).filter(Boolean),
         },
         alertasCobro: (alertasRows || []).map(a => ({
           id: a.id,
@@ -13260,7 +16602,7 @@ export default function App() {
     if (serviciosBoot == null || serviciosBoot.length === 0) {
       const { data: srvs } = await supabase
         .from("servicios")
-        .select("id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids")
+        .select("id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids, materiales_cantidades")
         .order("id")
       serviciosBoot = (srvs || []).map(mapServicioRow)
       if (seq !== refreshSeqRef.current) return
@@ -13285,6 +16627,13 @@ export default function App() {
     if (seq !== refreshSeqRef.current) return
     if (Array.isArray(j.clinics) && j.clinics.length) setClinicOptions(j.clinics)
   }, [useSupabaseAuth])
+
+  useEffect(() => {
+    setSession(loadSession())
+    setSection(getSectionFromPathname(window.location.pathname))
+    setUrlDoctorCtx(getDoctorCtxFromUrl())
+    setAppReady(true)
+  }, [])
 
   useEffect(() => {
     if (!import.meta.env.VITE_SUPABASE_URL) return
@@ -13379,11 +16728,35 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "historial_clinico" }, () => { void refreshErpData() })
       .on("postgres_changes", { event: "*", schema: "public", table: "clinic_movimientos" }, () => { void refreshErpData() })
       .on("postgres_changes", { event: "*", schema: "public", table: "tpv_movimientos" }, () => { void refreshErpData() })
+      .on("postgres_changes", { event: "*", schema: "public", table: "tpv_caja_sesiones" }, () => { void refreshErpData() })
       .on("postgres_changes", { event: "*", schema: "public", table: "alertas_cobro" }, () => { void refreshErpData() })
       .on("postgres_changes", { event: "*", schema: "public", table: "consentimientos_firmados" }, () => { void refreshErpData() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [useSupabaseAuth, refreshErpData])
+
+  /** Bonos/packs: hidratación + realtime propios (el bootstrap del backend no los incluye). */
+  useEffect(() => {
+    if (!useSupabaseAuth) return
+    let cancelled = false
+    const loadBonos = async () => {
+      try {
+        const snap = await fetchBonosSnapshot()
+        if (cancelled || !snap) return
+        setDataRaw(prev => ({ ...prev, ...snap }))
+      } catch (e) {
+        console.warn("[bonos] load:", e?.message || e)
+      }
+    }
+    void loadBonos()
+    const ch = supabase
+      .channel("erp-live-bonos-packs")
+      .on("postgres_changes", { event: "*", schema: "public", table: "bonos_packs" }, () => { void loadBonos() })
+      .on("postgres_changes", { event: "*", schema: "public", table: "bonos_pagos" }, () => { void loadBonos() })
+      .on("postgres_changes", { event: "*", schema: "public", table: "bonos_sesiones_uso" }, () => { void loadBonos() })
+      .subscribe()
+    return () => { cancelled = true; supabase.removeChannel(ch) }
+  }, [useSupabaseAuth])
 
   useEffect(() => {
     if (useSupabaseAuth) return
@@ -13419,8 +16792,6 @@ export default function App() {
     }, 2200)
     return () => clearInterval(id)
   }, [useSupabaseAuth])
-  const [urlDoctorCtx, setUrlDoctorCtx] = useState(() => getDoctorCtxFromUrl())
-  const [manualDoctorCtx, setManualDoctorCtx] = useState(null)
   const narrowNav = useMediaQuery("(max-width: 899px)")
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const goToSection = useCallback((nextSection) => {
@@ -13438,7 +16809,7 @@ export default function App() {
   const effectiveDoctorCtx = manualDoctorCtx ?? urlDoctorCtx
   const titles = {
     dashboard:"Dashboard", agenda:"Agenda", stock:"Stock", contabilidad:"Contabilidad", servicios:"Servicios",
-    pacientes:"Pacientes — historial clínico", documentos:"Documentos — consentimientos", clientes:"Clientes — CRM", personal:"Personal y turnos", reportes:"Reportes", marketing:"Marketing",
+    pacientes:"Pacientes — historial clínico", documentos:"Documentos — consentimientos", clientes:"Clientes — CRM", personal:"Personal y turnos", reportes:"Reportes", leads:"Leads — captación", marketing:"Marketing",
     bonos:"Bonos y packs", tpv:"TPV Virtual — Caja", analytics:"Reportes avanzados", reservas:"Reservas online",
     sala:"Sala — Orden de servicio",
     doctor_area:"Área médica (QR)",
@@ -13457,7 +16828,7 @@ export default function App() {
 
   useEffect(() => {
     if (!session || !role) return
-    if (!canAccess(role, section)) setSection("dashboard")
+    if (!canAccess(role, section)) setSection(canAccess(role, "agenda") ? "agenda" : "dashboard")
   }, [session, role, section])
 
   useEffect(() => {
@@ -13472,12 +16843,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (typeof window === "undefined") return
+    if (typeof window === "undefined" || !appReady) return
     const nextPath = getPathnameFromSection(section)
     const currentPath = normalizePathname(window.location.pathname)
     if (currentPath === nextPath) return
     window.history.replaceState({}, "", `${nextPath}${window.location.search}`)
-  }, [section])
+  }, [section, appReady])
 
   const navFiltered = useMemo(() => NAV.map(g => ({
     ...g,
@@ -13491,6 +16862,23 @@ export default function App() {
     setManualDoctorCtx(null)
     setUrlDoctorCtx(getDoctorCtxFromUrl())
     if (import.meta.env.VITE_SUPABASE_URL) void supabase.auth.signOut()
+  }
+
+  if (!appReady) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh",
+          width: "100%",
+          display: "flex",
+          background: "transparent",
+          position: "relative",
+          fontFamily: "'Inter','Segoe UI',system-ui,sans-serif",
+          overflow: "hidden",
+        }}
+        aria-hidden
+      />
+    )
   }
 
   const isPublicReserva = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reserva") === "1"
@@ -13513,6 +16901,7 @@ export default function App() {
         clinicNombre={clinicOptions.find(c => c.id === effectiveDoctorCtx?.clinicId)?.nombre}
         sessionEmail={session?.user}
         onConsentSaved={refreshErpData}
+        onPersist={refreshErpData}
       />
     )
   }
@@ -13528,6 +16917,94 @@ export default function App() {
           <p style={{ fontSize:14, color:C.muted, marginBottom:20 }}>Este enlace es para personal que atiende en sala. Iniciá sesión con usuario <strong>especialista</strong> o <strong>gerente</strong>, o cerrá para volver al escritorio.</p>
           <Btn onClick={exitDoctorPortal}>Entendido</Btn>
         </div>
+      </div>
+    )
+  }
+
+  if (section === "agenda") {
+    const clinicaNombreAgenda = clinicOptions.find(c => c.id === clinic)?.nombre || `Clínica ${clinic}`
+    return (
+      <div style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 800,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "'Inter','Segoe UI',system-ui,sans-serif",
+        background: "transparent",
+        overflow: "hidden",
+      }}>
+        <div className="erp-orbs" aria-hidden>
+          <span className="erp-orb erp-orb-1"/>
+          <span className="erp-orb erp-orb-2"/>
+          <span className="erp-orb erp-orb-3"/>
+          <span className="erp-orb erp-orb-4"/>
+        </div>
+        <header style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          padding: "max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left))",
+          borderBottom: "1px solid rgba(226,232,240,0.55)",
+          background: "linear-gradient(135deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.62) 100%)",
+          backdropFilter: "blur(14px) saturate(160%)",
+          WebkitBackdropFilter: "blur(14px) saturate(160%)",
+          flexShrink: 0,
+          position: "relative",
+          zIndex: 10,
+        }}>
+          <Btn variant="outline" onClick={() => goToSection("dashboard")} style={{ minHeight: 40 }}>
+            <ChevronLeft size={16}/> Volver
+          </Btn>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: C.text, letterSpacing: "-0.02em" }}>Agenda</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{fmtDate(TODAY)} · {clinicaNombreAgenda}</div>
+          </div>
+          <AlertasCobroBell data={data} setData={setData} clinic={clinic} role={role} onPersist={refreshErpData} />
+          <div style={{ display: "flex", gap: 4, overflowX: "auto", maxWidth: narrowNav ? "100%" : "36vw", WebkitOverflowScrolling: "touch" }}>
+            {(isGerente ? clinicOptions : clinicOptions.filter(c => c.id === ownClinicId)).map(c => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => { if (isGerente) setClinic(c.id) }}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 20,
+                  border: "1.5px solid",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: isGerente ? "pointer" : "default",
+                  background: clinic === c.id ? C.gradient : "rgba(255,255,255,0.65)",
+                  color: clinic === c.id ? "#fff" : C.muted,
+                  borderColor: clinic === c.id ? "rgba(255,255,255,0.3)" : "rgba(226,232,240,0.6)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {c.nombre}
+              </button>
+            ))}
+          </div>
+        </header>
+        <main style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          padding: "12px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left))",
+          position: "relative",
+          zIndex: 1,
+        }}>
+          <Agenda
+            fullscreen
+            data={data}
+            clinic={clinic}
+            setData={setData}
+            onPersist={refreshErpData}
+            role={role}
+            clinicOptions={clinicOptions}
+            onReloadBonos={() => void syncBonosToState(setData)}
+          />
+        </main>
       </div>
     )
   }
@@ -13682,7 +17159,7 @@ export default function App() {
           </div>
 
           <div style={{ order:3 }}>
-            <AlertasCobroBell data={data} setData={setData} clinic={clinic} role={role} />
+            <AlertasCobroBell data={data} setData={setData} clinic={clinic} role={role} onPersist={refreshErpData} />
           </div>
 
           {/* Clinic pills */}
@@ -13733,9 +17210,8 @@ export default function App() {
 
         {/* PAGE CONTENT */}
         <main style={{ flex:1, overflowY:"auto", WebkitOverflowScrolling:"touch", padding:"max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))" }}>
-          {section==="dashboard"     && <Dashboard     data={data} clinic={clinic} setData={setData} role={role} onOpenTurnoSession={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })}/>}
-          {section==="agenda"        && <Agenda        data={data} clinic={clinic} setData={setData} onPersist={refreshErpData} role={role} clinicOptions={clinicOptions}/>}
-          {section==="sala"          && <SalaOrdenServicio data={data} setData={setData} clinic={clinic} nombreProfesional={session.nombre} profFiltro={normalizeRol(role) === "especialista" ? 1 : null} />}
+          {section==="dashboard"     && <Dashboard     data={data} clinic={clinic} setData={setData} role={role} onOpenTurnoSession={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })} onPersist={refreshErpData} onGoAgenda={() => goToSection("agenda")} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre}/>}
+          {section==="sala"          && <SalaOrdenServicio data={data} setData={setData} clinic={clinic} nombreProfesional={session.nombre} profFiltro={normalizeRol(role) === "especialista" ? 1 : null} onPersist={refreshErpData} />}
           {section==="doctor_area"   && <DoctorAreaLanding clinic={clinic} demoTurno={pickDemoTurnoForDoctorArea(data.clinics[clinic]?.turnos)} onOpenDemo={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })} />}
           {section==="pacientes"     && <PacientesHistorial data={data} setData={setData} role={role} nombreUsuario={session.nombre} mode="pacientes" clinic={clinic} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre} onConsentSaved={refreshErpData} sessionEmail={session?.user}/>}
           {section==="clientes"      && <PacientesHistorial data={data} setData={setData} role={role} nombreUsuario={session.nombre} mode="clientes" clinic={clinic} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre} onConsentSaved={refreshErpData} sessionEmail={session?.user}/>}
@@ -13743,11 +17219,12 @@ export default function App() {
           {section==="stock"         && <Stock         data={data} clinic={clinic} setData={setData} onPersist={refreshErpData} role={role}/>}
           {section==="contabilidad"  && <Contabilidad  data={data} clinic={clinic} setData={setData}/>}
           {section==="servicios"     && <Servicios     data={data} clinic={clinic} setData={setData} onGoStock={() => goToSection("stock")} onPersist={refreshErpData}/>}
-          {section==="personal"      && <PersonalTurnos data={data} setData={setData} role={role}/>}
+          {section==="personal"      && <PersonalTurnos data={data} setData={setData} role={role} clinic={clinic}/>}
           {section==="reportes"      && <ReportesExport data={data} clinic={clinic}/>}
-          {section==="bonos"         && <BonosPacks data={data} setData={setData} clinic={clinic}/>}
-          {section==="tpv"           && <PuntoVenta data={data} setData={setData} clinic={clinic}/>}
-          {section==="marketing"     && <MarketingHub data={data} setData={setData} clinic={clinic}/>}
+          {section==="bonos"         && <BonosPacks data={data} setData={setData} clinic={clinic} role={role} onReloadBonos={() => void syncBonosToState(setData)}/>}
+          {section==="tpv"           && <PuntoVenta data={data} setData={setData} clinic={clinic} empleadoId={session?.userId} onPersist={refreshErpData}/>}
+          {section==="leads"         && <LeadsCRM clinic={clinic} role={role} onGoAgenda={() => goToSection("agenda")}/>}
+          {section==="marketing"     && <MarketingModulo data={data} setData={setData} clinic={clinic}/>}
           {section==="analytics"     && <ReportesAvanzados data={data} clinic={clinic}/>}
           {section==="reservas"      && <ReservasOnline data={data} setData={setData} clinic={clinic}/>}
           {section==="configuracion" && <ConfiguracionCuentas onClinicsChanged={refreshClinics} />}
