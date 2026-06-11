@@ -12,7 +12,7 @@ import {
   CreditCard, Gift, Globe, BarChart3, ShoppingCart, Bell, MonitorPlay, QrCode, Copy, Menu, Smartphone,
   Banknote, Wallet, Delete, Minus, Mic, Loader2, Camera, ScanLine, Square,
   CheckCircle2, Building2, Settings, UserPlus, Pencil, Eraser, Undo2, RotateCcw, Link2, ImagePlus,
-  ChevronRight, ChevronLeft, ClipboardCheck, Activity, Send, Target,
+  ChevronRight, ChevronLeft, ClipboardCheck, Activity, Send, Target, UserCheck,
 } from "lucide-react"
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -10791,8 +10791,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const [camaraFullscreen, setCamaraFullscreen] = useState(false)
   const [docIaModo, setDocIaModo] = useState(null)
   const [analisisMsgIdx, setAnalisisMsgIdx] = useState(0)
-  /** Asistente por fases: veredicto → IA → fotos antes → resultado (texto+IA + fotos después) → evaluación → orden (sesion_medica_borrador). */
-  const [wizardFase, setWizardFase] = useState("veredicto")
+  /** Asistente por fases: check-in (datos + RGPD) → veredicto → IA → fotos antes → resultado (texto+IA + fotos después) → evaluación → orden (sesion_medica_borrador). */
+  const [wizardFase, setWizardFase] = useState("checkin")
   const borradorSesionListoRef = useRef(false)
   const [finalizando, setFinalizando] = useState(false)
   const [askExtrasOpen, setAskExtrasOpen] = useState(false)
@@ -10836,6 +10836,29 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   const pacienteIdSesion = turno ? (turno.pacienteId ?? findPacienteIdByNombre(data, turno.cliente, clinicId)) : null
   const pacienteSesion = pacienteIdSesion ? data.pacientes?.find(p => +p.id === +pacienteIdSesion) : null
 
+  /** Check-in al llegar: confirmar datos del paciente + firma RGPD antes de la fase clínica. */
+  const RGPD_SLUG = "ley-de-proteccion-de-datos-bs"
+  const [checkinForm, setCheckinForm] = useState({ nombre: "", dni: "", tel: "", email: "", fechaNacimiento: "" })
+  const checkinPrefillRef = useRef(false)
+  const [savingCheckin, setSavingCheckin] = useState(false)
+  const sigRgpdRef = useRef(null)
+  useEffect(() => { checkinPrefillRef.current = false }, [turnoId])
+  useEffect(() => {
+    if (!pacienteSesion || checkinPrefillRef.current) return
+    checkinPrefillRef.current = true
+    setCheckinForm({
+      nombre: pacienteSesion.nombre || "",
+      dni: pacienteSesion.dni || "",
+      tel: pacienteSesion.tel || "",
+      email: pacienteSesion.email || "",
+      fechaNacimiento: pacienteSesion.fechaNacimiento || "",
+    })
+  }, [pacienteSesion])
+  const rgpdFirmado = useMemo(
+    () => pacienteIdSesion != null && (data.consentimientosFirmados || []).some(c => c.plantillaSlug === RGPD_SLUG && +c.clienteId === +pacienteIdSesion),
+    [data.consentimientosFirmados, pacienteIdSesion],
+  )
+
   useEffect(() => {
     setFotoSesionFase("antes")
     setDespuesTripleCompleto(false)
@@ -10846,7 +10869,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     setFotoFichaGuardada(false)
     setQtyReal({})
     setFotosInsumos([])
-    setWizardFase("veredicto")
+    setWizardFase("checkin")
     setTextoResultado("")
     resultadoDictadoRef.current = ""
     borradorSesionListoRef.current = false
@@ -10889,7 +10912,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       if (b.fotoSesionFase === "antes" || b.fotoSesionFase === "despues") setFotoSesionFase(b.fotoSesionFase)
       if (typeof b.despuesTripleCompleto === "boolean") setDespuesTripleCompleto(b.despuesTripleCompleto)
       if (typeof b.textoResultado === "string") setTextoResultado(b.textoResultado)
-      const validF = ["veredicto", "propuesta_ia", "registro", "resultado", "evaluacion", "orden"]
+      const validF = ["checkin", "veredicto", "propuesta_ia", "registro", "resultado", "evaluacion", "orden"]
       if (typeof b.wizardFase === "string" && validF.includes(b.wizardFase)) setWizardFase(b.wizardFase)
     }
     borradorSesionListoRef.current = true
@@ -13085,6 +13108,152 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     }
   }
 
+  /** Texto RGPD con los datos actuales del formulario de check-in. */
+  const rgpdPreviewHtml = useMemo(() => {
+    const pl = plantillasConsentArea.find(p => p.slug === RGPD_SLUG)
+    if (!pl || !pacienteSesion) return ""
+    const fechaStr = new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" })
+    const cuerpo = armarCuerpoConsentimiento(pl.cuerpo_texto, { ...pacienteSesion, nombre: checkinForm.nombre || pacienteSesion.nombre }, {
+      servicioOProducto: `Check-in — ${turno?.servicio || "atención en clínica"}`,
+      fechaStr,
+      centroNombre: clinicNombre || `Clínica ${clinicId}`,
+    })
+    return textoAHtmlParrafos(cuerpo)
+  }, [plantillasConsentArea, pacienteSesion, checkinForm.nombre, turno?.servicio, clinicNombre, clinicId])
+
+  /** Check-in: guarda los datos del paciente y registra la firma RGPD; después abre la fase clínica. */
+  const completarCheckin = async () => {
+    if (!pacienteIdSesion || !pacienteSesion) {
+      setWizardFase("veredicto")
+      return
+    }
+    if (!String(checkinForm.nombre || "").trim()) {
+      alert("Indicá el nombre completo del paciente.")
+      return
+    }
+    if (!rgpdFirmado && sigRgpdRef.current?.isEmpty?.()) {
+      alert("El paciente debe firmar el consentimiento de protección de datos (RGPD).")
+      return
+    }
+    setSavingCheckin(true)
+    try {
+      const nombreTrim = checkinForm.nombre.trim()
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const upd = {
+          nombre: nombreTrim,
+          dni: String(checkinForm.dni || "").trim(),
+          tel: String(checkinForm.tel || "").trim(),
+          email: String(checkinForm.email || "").trim(),
+          fecha_nacimiento: String(checkinForm.fechaNacimiento || "").trim() || null,
+        }
+        const { error: eUpd } = await supabase.from("clientes").update(upd).eq("id", pacienteIdSesion)
+        if (eUpd) {
+          alert(eUpd.message || "No se pudieron guardar los datos del paciente.")
+          return
+        }
+        setData(d => ({
+          ...d,
+          pacientes: (d.pacientes || []).map(p => +p.id === +pacienteIdSesion
+            ? { ...p, nombre: upd.nombre, dni: upd.dni, tel: upd.tel, email: upd.email, fechaNacimiento: upd.fecha_nacimiento || "" }
+            : p),
+        }))
+      }
+
+      if (!rgpdFirmado && import.meta.env.VITE_SUPABASE_URL) {
+        const pl = plantillasConsentArea.find(p => p.slug === RGPD_SLUG)
+        if (!pl) {
+          alert("No se encontró la plantilla de protección de datos (RGPD).")
+          return
+        }
+        const fechaStr = new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" })
+        const pacienteAct = {
+          ...pacienteSesion,
+          nombre: nombreTrim,
+          dni: String(checkinForm.dni || "").trim(),
+          tel: String(checkinForm.tel || "").trim(),
+          email: String(checkinForm.email || "").trim(),
+          fechaNacimiento: String(checkinForm.fechaNacimiento || "").trim(),
+        }
+        const servicioDet = `Check-in — ${turno?.servicio || "atención en clínica"}`
+        const cuerpo = armarCuerpoConsentimiento(pl.cuerpo_texto, pacienteAct, {
+          servicioOProducto: servicioDet,
+          fechaStr,
+          centroNombre: clinicNombre || `Clínica ${clinicId}`,
+        })
+        const contenidoHtml = textoAHtmlParrafos(cuerpo)
+        const firmadoPorId = (data.empleados || []).find(e => String(e.email || "").toLowerCase() === String(sessionEmail || "").toLowerCase())?.id ?? null
+        const varsPdf = varsDesdePaciente(pacienteAct, {
+          servicioOProducto: servicioDet,
+          fecha: fechaStr,
+          centro: clinicNombre || `Clínica ${clinicId}`,
+        })
+        const cuerpoPdf = cuerpoConsentimientoParaPdf(rellenarPlantilla(pl.cuerpo_texto, varsPdf))
+        const empArea = (data.empleados || []).find(e => String(e.email || "").toLowerCase() === String(sessionEmail || "").toLowerCase())
+        const { data: { session: sb } } = await supabase.auth.getSession()
+        const token = sb?.access_token
+        if (!token) {
+          alert("Tu sesión expiró. Volvé a iniciar sesión.")
+          return
+        }
+        let pdfPublicUrl = ""
+        try {
+          const pdfDataUrl = await buildConsentimientoPdfDataUrl({
+            titulo: pl.titulo,
+            cuerpoTexto: cuerpoPdf,
+            firmaPacienteDataUrl: sigRgpdRef.current.getDataURL(),
+            firmaProfesionalDataUrl: null,
+            nombrePaciente: pacienteAct.nombre || "",
+            pacienteDni: pacienteAct.dni,
+            pacienteEmail: pacienteAct.email,
+            pacienteTelefono: pacienteAct.tel,
+            pacienteFechaNacimiento: varsPdf.pacienteFechaNacimiento,
+            datosCentro: clinicNombre || `Clínica ${clinicId}`,
+            numeroColegiado: empArea?.documento || "—",
+            nombreProfesional: nombreProfesional || "",
+            fechaStr,
+          })
+          pdfPublicUrl = await uploadConsentPdfDataUrl(pdfDataUrl, {
+            clinicId: pacienteSesion.clinicId,
+            clienteId: pacienteIdSesion,
+            accessToken: token,
+          })
+        } catch (e) {
+          alert(`No se pudo generar o subir el PDF del RGPD: ${String(e?.message || e)}`)
+          return
+        }
+        const { data: ins, error } = await supabase
+          .from("consentimientos_firmados")
+          .insert({
+            clinic_id: pacienteSesion.clinicId,
+            cliente_id: pacienteIdSesion,
+            turno_id: turnoId,
+            plantilla_slug: pl.slug,
+            titulo: pl.titulo,
+            servicio_o_producto: servicioDet,
+            paciente_nombre_snapshot: pacienteAct.nombre || "",
+            contenido_html: contenidoHtml,
+            pdf_storage_path: pdfPublicUrl,
+            firmado_por_empleado_id: firmadoPorId,
+          })
+          .select("*")
+          .single()
+        if (error) {
+          alert(error.message || "No se pudo guardar el consentimiento RGPD.")
+          return
+        }
+        const mapped = mapConsentimientoFirmadoRow(ins)
+        setData(d => ({
+          ...d,
+          consentimientosFirmados: [...(d.consentimientosFirmados || []), mapped],
+        }))
+        sigRgpdRef.current?.clear?.()
+      }
+      setWizardFase("veredicto")
+    } finally {
+      setSavingCheckin(false)
+    }
+  }
+
   const idsMaterialesSrv = srvsOrden.length
     ? [...new Set(srvsOrden.flatMap(s => materialesStockIdsDelServicio(s)))]
     : []
@@ -13322,6 +13491,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     ? "Redactando resultado clínico de la sesión…"
     : (listaAnalisisActual[analisisMsgIdx] ?? listaAnalisisActual[0])
   const wizardDefs = [
+    { id: "checkin", label: "Check-in" },
     { id: "veredicto", label: "Veredicto" },
     { id: "propuesta_ia", label: "Propuesta IA" },
     { id: "registro", label: "Fotos antes" },
@@ -13367,6 +13537,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     overflow: "hidden",
   }
   const wizardIcons = {
+    checkin: UserCheck,
     veredicto: Mic,
     propuesta_ia: ClipboardCheck,
     registro: Camera,
@@ -13703,6 +13874,91 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
             )}
           </div>
         )}
+
+        {wizardFase === "checkin" && <div key="wiz-checkin" className="erp-fadein" style={medCard}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+            <div style={{
+              width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center",
+              background:C.gradient, color:"#fff",
+              boxShadow:`0 8px 18px -6px ${C.violet}66, 0 1px 0 rgba(255,255,255,0.4) inset`,
+            }}>
+              <UserCheck size={18} strokeWidth={2.4}/>
+            </div>
+            <div>
+              <div style={{ fontSize:10, fontWeight:800, color:C.violet, letterSpacing:"0.08em", textTransform:"uppercase" }}>Llegada a la clínica</div>
+              <div style={{ fontSize:16, fontWeight:800, color:C.text }}>Check-in del paciente</div>
+            </div>
+          </div>
+          {!pacienteSesion ? (
+            <>
+              <p style={{ fontSize:13, color:"#b91c1c", lineHeight:1.5 }}>
+                Este turno no tiene ficha de paciente vinculada en el sistema. Podés continuar con la atención (la ficha se crea al finalizar), pero el consentimiento RGPD habrá que registrarlo después desde la fase de orden.
+              </p>
+              <div style={{ display:"flex", justifyContent:"flex-end", marginTop:12 }}>
+                <Btn onClick={() => setWizardFase("veredicto")} style={{ minHeight:48 }}>Continuar sin check-in <ChevronRight size={16}/></Btn>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize:13, color:C.muted, marginBottom:14, lineHeight:1.5 }}>
+                Confirmá con el paciente sus datos personales y pedile que lea y firme el consentimiento de <strong>protección de datos (RGPD)</strong>. Al guardar se genera el PDF firmado y se abre la sesión clínica.
+              </p>
+              <div style={{ display:"grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap:10 }}>
+                <FG label="Nombre y apellidos">
+                  <input style={{ ...inp, background:"#fff", fontSize:16 }} value={checkinForm.nombre} onChange={e => setCheckinForm(f => ({ ...f, nombre: e.target.value }))} placeholder="Nombre completo"/>
+                </FG>
+                <FG label="DNI / NIE">
+                  <input style={{ ...inp, background:"#fff", fontSize:16 }} value={checkinForm.dni} onChange={e => setCheckinForm(f => ({ ...f, dni: e.target.value }))} placeholder="DNI o NIE"/>
+                </FG>
+                <FG label="Teléfono">
+                  <input style={{ ...inp, background:"#fff", fontSize:16 }} type="tel" value={checkinForm.tel} onChange={e => setCheckinForm(f => ({ ...f, tel: e.target.value }))} placeholder="+34 …"/>
+                </FG>
+                <FG label="Email">
+                  <input style={{ ...inp, background:"#fff", fontSize:16 }} type="email" value={checkinForm.email} onChange={e => setCheckinForm(f => ({ ...f, email: e.target.value }))} placeholder="correo@ejemplo.com"/>
+                </FG>
+                <FG label="Fecha de nacimiento">
+                  <input style={{ ...inp, background:"#fff", fontSize:16 }} type="date" value={checkinForm.fechaNacimiento} onChange={e => setCheckinForm(f => ({ ...f, fechaNacimiento: e.target.value }))}/>
+                </FG>
+              </div>
+              {rgpdFirmado ? (
+                <div style={{
+                  marginTop:14, padding:"12px 14px", borderRadius:12,
+                  border:"1px solid #6ee7b7", background:"#ecfdf5",
+                  display:"flex", alignItems:"center", gap:8,
+                  fontSize:13, color:"#047857", fontWeight:700,
+                }}>
+                  <CheckCircle2 size={16}/> RGPD ya firmado por este paciente — no hace falta volver a firmarlo.
+                </div>
+              ) : (
+                <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:"#047857", marginBottom:8, display:"flex", alignItems:"center", gap:8 }}>
+                    <FileText size={16} color="#047857"/> Consentimiento de protección de datos (RGPD)
+                  </div>
+                  <ConsentimientoLecturaPanel
+                    html={rgpdPreviewHtml}
+                    C={C}
+                    subtitle={`Texto completo con los datos de ${checkinForm.nombre || "el/la paciente"}. Debe leerlo antes de firmar.`}
+                  />
+                  <div style={{ marginTop:12 }}>
+                    <SignaturePad
+                      ref={sigRgpdRef}
+                      width={Math.min(340, typeof window !== "undefined" ? Math.min(340, window.innerWidth - 80) : 340)}
+                      height={130}
+                      label="Firma del paciente (obligatoria)"
+                      hint="Pedile que firme con el dedo en la tablet o teléfono."
+                    />
+                    <Btn type="button" variant="outline" sm style={{ marginTop:6 }} onClick={() => sigRgpdRef.current?.clear?.()}>Limpiar firma</Btn>
+                  </div>
+                </div>
+              )}
+              <div style={{ display:"flex", justifyContent:"flex-end", marginTop:16 }}>
+                <Btn onClick={() => void completarCheckin()} disabled={savingCheckin} style={{ minHeight:48 }}>
+                  {savingCheckin ? "Guardando…" : <>Guardar check-in y empezar atención <ChevronRight size={16}/></>}
+                </Btn>
+              </div>
+            </>
+          )}
+        </div>}
 
         {wizardFase === "veredicto" && <div key="wiz-veredicto" className="erp-fadein" style={medCard}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
