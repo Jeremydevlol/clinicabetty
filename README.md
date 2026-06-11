@@ -4,15 +4,15 @@ Estructura del repositorio:
 
 ```
 clinica-erp/
-├── aplicacion-web/     ← Aplicación Vite + React (código fuente, dependencias, build)
-│   ├── src/
+├── aplicacion-web/     ← Next.js + React (App Router, `src/` compartido)
+│   ├── app/            ← layout, page, estilos globales
+│   ├── src/            ← App.jsx y módulos
 │   ├── public/
-│   ├── package.json
-│   └── vite.config.js
-└── README.md           ← Este archivo
+│   └── package.json
+└── ...
 ```
 
-**Cómo arrancar:** entrá a `aplicacion-web`, instalá dependencias si hace falta y levantá el servidor de desarrollo.
+**Cómo arrancar:**
 
 ```bash
 cd aplicacion-web
@@ -20,4 +20,6 @@ npm install
 npm run dev
 ```
 
-Los archivos de entorno (`.env`, `.env.local`) viven en `aplicacion-web/` junto al `package.json`.
+Abre `http://localhost:3000`. Las variables de entorno van en `aplicacion-web/.env` o `.env.local` (pueden seguir usando nombres `VITE_*`; también se mapean a `NEXT_PUBLIC_*` en `next.config.mjs`).
+
+**APIs:** en desarrollo, los middlewares que antes inyectaba Vite no existen. Usá `backend-node` o definí `NEXT_API_PROXY` en `.env.local` (URL del backend) para reescribir `/api/*` hacia ese servidor.
