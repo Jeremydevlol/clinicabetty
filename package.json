@@ -3,8 +3,10 @@
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix aplicacion-web",
+    "dev:backend": "sh -c 'set -a; [ -f aplicacion-web/.env ] && . aplicacion-web/.env; [ -f aplicacion-web/.env.local ] && . aplicacion-web/.env.local; set +a; npm run dev --prefix backend-node'",
+    "dev:all": "npx --yes concurrently -k -n api,web -c green,blue \"npm run dev:backend\" \"npm run dev\"",
     "build": "npm run build --prefix aplicacion-web",
-    "preview": "npm run preview --prefix aplicacion-web",
+    "start": "npm run start --prefix aplicacion-web",
     "lint": "npm run lint --prefix aplicacion-web",
     "db:fix-auth-user-id": "npm run db:fix-auth-user-id --prefix aplicacion-web"
   }

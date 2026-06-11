@@ -1,0 +1,25 @@
+# dependencies
+node_modules
+
+# next
+.next
+out
+.vercel
+*.tsbuildinfo
+
+# Baileys (sesión WhatsApp)
+.wa-auth
+
+# Config del agente BS CLINIQ (panel Marketing)
+.bs-cliniq-agent.json
+
+# env
+.env
+.env.local
+.env.*.local
+
+# debug
+*.log
+.DS_Store
+
+certificates

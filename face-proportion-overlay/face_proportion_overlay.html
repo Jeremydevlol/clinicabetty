@@ -110,15 +110,15 @@
   .ocr-hint { font-size:8px; color:#444; margin-bottom:10px; line-height:1.45; }
   .ocr-hint code { background:#111; padding:2px 5px; border-radius:2px; color:#666; }
   .ocr-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center; }
-  #btnOcr, #btnDeepface {
+  #btnOcr {
     background:transparent; border:1px solid #3d3560;
     color:#9a8bc4; padding:6px 14px;
     font-family:'DM Mono',monospace; font-size:9px;
     letter-spacing:2px; cursor:pointer; text-transform:uppercase;
     border-radius:2px;
   }
-  #btnOcr:hover, #btnDeepface:hover { border-color:#7C5CBF; color:#ccc; }
-  #btnOcr:disabled, #btnDeepface:disabled { opacity:0.4; cursor:wait; }
+  #btnOcr:hover { border-color:#7C5CBF; color:#ccc; }
+  #btnOcr:disabled { opacity:0.4; cursor:wait; }
   .ocr-out {
     margin-top:10px; padding:10px 12px; background:#0c0c0c;
     border:1px solid #1a1a1a; border-radius:4px;
@@ -212,17 +212,6 @@
     <button type="button" id="btnOcr" onclick="runOpenAiOcr()">Extraer texto (OpenAI)</button>
   </div>
   <pre id="ocrOut" class="ocr-out" role="status">Aquí aparecerá el texto detectado…</pre>
-</div>
-
-<div class="ocr-block">
-  <p class="ocr-hint">
-    <strong style="color:#555;">DeepFace (local)</strong> — estimación de edad, género, emoción y grupo étnico (modelo estadístico; puede equivocarse).
-    Requiere el mismo servidor Python con <code>python3 -m pip install -r requirements-deepface.txt</code> (incluye <code>tf-keras</code> para TensorFlow 2.16+) y reiniciar.
-  </p>
-  <div class="ocr-row">
-    <button type="button" id="btnDeepface" onclick="runDeepFace()">Analizar rostro (DeepFace)</button>
-  </div>
-  <pre id="deepfaceOut" class="ocr-out" role="status">Pulsa el botón para analizar el fotograma actual de la cámara.</pre>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -1196,73 +1185,6 @@ async function runOpenAiOcr() {
       '\n\nSi ves «Failed to fetch» o 404: arranca el servidor con\n' +
       '  OPENAI_API_KEY=sk-… python3 face_overlay_server.py\n' +
       'y abre la página desde ese puerto (no uses solo «python -m http.server»).';
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function formatDeepFaceResult(j) {
-  const lines = [];
-  if (j.age != null) lines.push('Edad estimada: ' + j.age);
-  if (j.dominant_gender) lines.push('Género (dominante): ' + j.dominant_gender);
-  if (j.gender && typeof j.gender === 'object') {
-    const parts = Object.keys(j.gender).map(k => {
-      const v = j.gender[k];
-      const p = typeof v === 'number' ? (v <= 1 ? (v * 100).toFixed(0) + '%' : String(v)) : String(v);
-      return k + ': ' + p;
-    });
-    if (parts.length) lines.push('Prob. género: ' + parts.join(', '));
-  }
-  if (j.dominant_emotion) lines.push('Emoción dominante: ' + j.dominant_emotion);
-  if (j.dominant_race) lines.push('Grupo étnico (modelo): ' + j.dominant_race);
-  if (lines.length === 0) return JSON.stringify(j, null, 2);
-  lines.push('');
-  lines.push('— Solo referencia; no sustituye valoración clínica.');
-  return lines.join('\n');
-}
-
-async function runDeepFace() {
-  const btn = document.getElementById('btnDeepface');
-  const out = document.getElementById('deepfaceOut');
-  if (!vid.videoWidth || !vid.videoHeight) {
-    out.textContent = '✗ La cámara aún no tiene imagen.';
-    out.className = 'ocr-out ocr-err';
-    return;
-  }
-  btn.disabled = true;
-  out.className = 'ocr-out';
-  out.textContent = 'Analizando con DeepFace (puede tardar la primera vez)…';
-
-  const snap = document.createElement('canvas');
-  snap.width = vid.videoWidth;
-  snap.height = vid.videoHeight;
-  const sx = snap.getContext('2d');
-  sx.drawImage(vid, 0, 0);
-
-  const dataUrl = snap.toDataURL('image/jpeg', 0.88);
-  const imageBase64 = dataUrl.indexOf(',') >= 0 ? dataUrl.split(',')[1] : '';
-
-  try {
-    const res = await fetch('/api/deepface', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_base64: imageBase64 })
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || j.ok === false) {
-      throw new Error(j.error || res.statusText || 'Error del servidor');
-    }
-    out.className = 'ocr-out';
-    out.textContent = formatDeepFaceResult(j);
-  } catch (e) {
-    out.className = 'ocr-out ocr-err';
-    const hint = (e && e.message) || String(e);
-    out.textContent =
-      '✗ ' + hint +
-      '\n\nInstala en el mismo entorno del servidor:\n' +
-      '  python3 -m pip install tf-keras\n' +
-      '  (o todo: python3 -m pip install -r requirements-deepface.txt)\n' +
-      'y reinicia face_overlay_server.py. Abre la página desde ese puerto.';
   } finally {
     btn.disabled = false;
   }

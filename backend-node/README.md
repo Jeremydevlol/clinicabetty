@@ -24,14 +24,14 @@ mejor aún, refactorizá ambos para que importen desde un módulo compartido).
 - `GET|POST /api/erp-state` — estado en memoria
 - `POST /api/openai/doctor-session`
 - `POST /api/openai/doctor-audio`
+- `POST /api/openai/insumo-foto`
 - `POST /api/openai/resultado-sesion`
 - `POST /api/openai/resultado-audio`
 - `POST /api/openai/tpv-cobro`
 - `POST /api/openai/face-landmarks`
 - `POST /api/ocr`
-- `POST /api/deepface` — proxy/local DeepFace
-- `GET  /api/deepface/status`
-- `POST /api/face-analysis/full` — combo DeepFace + OpenAI Vision
+- `POST /api/face-analysis/full` — análisis clínico-estético del rostro (OpenAI Vision)
+- `POST /api/treatment-preview` — plan clínico (gpt-4o) + preview en zonas enmascaradas (gpt-image-2)
 - `POST /api/admin/create-staff`
 - `POST /api/admin/create-clinic`
 - `POST /api/admin/bootstrap-gerente`
@@ -49,8 +49,6 @@ mejor aún, refactorizá ambos para que importen desde un módulo compartido).
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí          | Service role key (NUNCA exponer al cliente)                               |
 | `OPENAI_API_KEY`            | Sí          | Clave OpenAI                                                              |
 | `GERENTE_SIGNUP_SECRET`     | Opcional    | Secreto para registrar el primer gerente                                  |
-| `DEEPFACE_REMOTE_URL`       | Opcional    | URL del deepface-service (otro servicio Render). Si vacío, intenta Python local (no funciona en Docker) |
-| `DEEPFACE_REMOTE_TOKEN`     | Opcional    | Token si activaste API_TOKEN en el deepface-service                       |
 
 ## Probar localmente
 
@@ -61,7 +59,6 @@ PORT=8765 \
 VITE_SUPABASE_URL='https://xxxx.supabase.co' \
 SUPABASE_SERVICE_ROLE_KEY='eyJxxx...' \
 OPENAI_API_KEY='sk-xxx' \
-DEEPFACE_REMOTE_URL='https://clinicabetty.onrender.com' \
 node server.js
 ```
 
@@ -83,8 +80,6 @@ curl http://localhost:8765/api/erp-state
    - `VITE_SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `OPENAI_API_KEY`
-   - `DEEPFACE_REMOTE_URL` → `https://clinicabetty.onrender.com`
-   - (opcional) `DEEPFACE_REMOTE_TOKEN`
    - (opcional) `GERENTE_SIGNUP_SECRET`
 4. **Manual Deploy** → **Deploy latest commit**.
 
@@ -101,7 +96,7 @@ curl http://localhost:8765/api/erp-state
 
 Cuando arranque vas a ver en logs:
 ```
-[backend] Escuchando en :10000 · supabase=true · openai=true · deepface=true
+[backend] Escuchando en :10000 · supabase=true · openai=true
 ```
 
 Anotá la URL pública (algo como `https://clinica-erp-backend.onrender.com`).
@@ -128,10 +123,7 @@ En el proyecto de Vercel del frontend, además de las que ya tenías, necesitás
 ```
 VITE_SUPABASE_URL          = https://xxxx.supabase.co
 VITE_SUPABASE_ANON_KEY     = eyJxxx...   (la pública, NO la service role)
-VITE_DEEPFACE_URL          = https://clinicabetty.onrender.com
 ```
-
-(`VITE_DEEPFACE_TOKEN` solo si configuraste `API_TOKEN` en el deepface-service.)
 
 Después de cambiar variables o `vercel.json`, **redeploy**.
 

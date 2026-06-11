@@ -22,7 +22,3 @@ services:
         sync: false
       - key: GERENTE_SIGNUP_SECRET
         sync: false
-      - key: DEEPFACE_REMOTE_URL
-        sync: false
-      - key: DEEPFACE_REMOTE_TOKEN
-        sync: false

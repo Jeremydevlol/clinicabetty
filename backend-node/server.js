@@ -2,7 +2,7 @@
 /**
  * Backend Node.js standalone para el ERP de Clínica Betty.
  *
- * Monta todos los middlewares que están en aplicacion-web/vite.config.js
+ * Monta todos los middlewares definidos en backend-node/plugins.mjs (histórico: copia de Vite).
  * (copiados en ./plugins.mjs) dentro de una app Express, para poder desplegarlos
  * en un entorno real (Render) en lugar de depender del dev server de Vite.
  *
@@ -12,17 +12,19 @@
  *   SUPABASE_SERVICE_ROLE_KEY     Service role key (secreta, solo server-side)
  *   OPENAI_API_KEY                Clave de OpenAI
  *   GERENTE_SIGNUP_SECRET         Secreto opcional para bootstrap del primer gerente
- *   DEEPFACE_REMOTE_URL           URL del deepface-service (otro servicio de Render)
- *   DEEPFACE_REMOTE_TOKEN         Token opcional si activaste API_TOKEN en DeepFace
  *   ALLOWED_ORIGIN                CORS (default: "*")
+ *   WHATSAPP_ACCESS_TOKEN         (opcional) Cloud API
+ *   WHATSAPP_PHONE_NUMBER_ID
+ *   WHATSAPP_WEBHOOK_VERIFY_TOKEN
+ *   WHATSAPP_API_VERSION          default v21.0
  */
 import express from 'express'
 import cors from 'cors'
 import {
   erpStateSyncPlugin,
   openaiProxiesPlugin,
-  deepfaceBridgePlugin,
-  faceAnalysisFullPlugin,
+  faceClinicalOpenAiPlugin,
+  treatmentPreviewPlugin,
   adminCreateStaffPlugin,
   adminCreateClinicPlugin,
   bootstrapGerentePlugin,
@@ -35,9 +37,14 @@ const SUPABASE_URL = process.env.VITE_SUPABASE_URL || ''
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ''
 const GERENTE_SIGNUP_SECRET = process.env.GERENTE_SIGNUP_SECRET || ''
-const DEEPFACE_REMOTE_URL = process.env.DEEPFACE_REMOTE_URL || ''
-const DEEPFACE_REMOTE_TOKEN = process.env.DEEPFACE_REMOTE_TOKEN || ''
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*'
+
+const metaMarketing = {
+  waToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
+  waPhoneId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+  waVerify: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '',
+  waApiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+}
 
 const app = express()
 // Body parsing: los plugins leen el body con req.on('data') directamente, así
@@ -61,8 +68,8 @@ app.get('/', (_req, res) => {
       '/api/erp-state',
       '/api/openai/*',
       '/api/ocr',
-      '/api/deepface*',
       '/api/face-analysis/full',
+      '/api/treatment-preview',
       '/api/admin/*',
       '/api/erp/*',
     ],
@@ -74,7 +81,6 @@ app.get('/health', (_req, res) => {
     ok: true,
     supabase: Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE),
     openai: Boolean(OPENAI_API_KEY),
-    deepface: Boolean(DEEPFACE_REMOTE_URL),
   })
 })
 
@@ -100,15 +106,10 @@ function mountPlugin(plugin) {
 // ─── Montaje de plugins ─────────────────────────────────────────────
 mountPlugin(erpStateSyncPlugin())
 mountPlugin(openaiProxiesPlugin(OPENAI_API_KEY))
+mountPlugin(faceClinicalOpenAiPlugin(OPENAI_API_KEY))
+mountPlugin(treatmentPreviewPlugin(OPENAI_API_KEY))
 
-const dfPlugin = deepfaceBridgePlugin({
-  remoteUrl: DEEPFACE_REMOTE_URL,
-  remoteToken: DEEPFACE_REMOTE_TOKEN,
-})
-mountPlugin(dfPlugin)
-mountPlugin(faceAnalysisFullPlugin(OPENAI_API_KEY, dfPlugin))
-
-mountPlugin(erpOperationsPlugin(SUPABASE_URL, SUPABASE_SERVICE_ROLE))
+mountPlugin(erpOperationsPlugin(SUPABASE_URL, SUPABASE_SERVICE_ROLE, metaMarketing))
 mountPlugin(mediaUploadPlugin(SUPABASE_URL, SUPABASE_SERVICE_ROLE))
 mountPlugin(adminCreateStaffPlugin(SUPABASE_URL, SUPABASE_SERVICE_ROLE))
 mountPlugin(adminCreateClinicPlugin(SUPABASE_URL, SUPABASE_SERVICE_ROLE))
@@ -128,6 +129,6 @@ app.use((err, _req, res, _next) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(
     `[backend] Escuchando en :${PORT} · supabase=${Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE)} · ` +
-      `openai=${Boolean(OPENAI_API_KEY)} · deepface=${Boolean(DEEPFACE_REMOTE_URL)}`
+      `openai=${Boolean(OPENAI_API_KEY)}`
   )
 })
