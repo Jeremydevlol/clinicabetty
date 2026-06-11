@@ -15938,40 +15938,171 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
     }
   }
 
+  // Tiempo de espera: minutos desde que se puso en_sala/en_curso
+  const [ahora, setAhora] = useState(() => Date.now())
+  useEffect(() => { const iv = setInterval(() => setAhora(Date.now()), 30000); return () => clearInterval(iv) }, [])
+  const minutosDesdeTurno = t => {
+    const [h, m] = String(t.hora || "00:00").split(":").map(Number)
+    const ref = new Date(); ref.setHours(h, m, 0, 0)
+    const diff = Math.max(0, Math.floor((ahora - ref.getTime()) / 60000))
+    return diff
+  }
+
+  const enEspera = lista.filter(t => t.estado === "en_sala")
+  const enAtencion = lista.filter(t => t.estado === "en_curso")
+
+  const tarjetaBase = {
+    borderRadius: 16,
+    padding: "18px 20px",
+    boxShadow: "0 2px 8px rgba(0,0,0,.07)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  }
+
+  const TiempoEspera = ({ minutos }) => {
+    const color = minutos < 15 ? "#059669" : minutos < 30 ? "#D97706" : "#DC2626"
+    return (
+      <span style={{ fontSize: 11, fontWeight: 800, color, background: color + "18", borderRadius: 20, padding: "3px 9px" }}>
+        {minutos < 1 ? "Ahora" : `${minutos} min`}
+      </span>
+    )
+  }
+
   return (
-    <div>
-      <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Sala — Orden de servicio</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:14 }}>
-        Elegí el <strong>servicio a facturar</strong> (puede diferir del turno agendado), cargá insumos y finalizá: la recepción recibe el ticket con ese importe + consumibles.
-      </p>
-      {lista.length === 0 ? (
-        <div style={{ background:C.card, borderRadius:16, padding:36, textAlign:"center", color:"#94A3B8", fontSize:14 }}>No hay pacientes en sala para esta clínica{profFiltro ? " / tu agenda" : ""}. Desde Agenda, pasá el turno a «A sala».</div>
-      ) : (
-        <div style={{ display:"grid", gap:14 }}>
-          {lista.map(t => (
-            <div key={t.id} style={{ background:C.card, borderRadius:16, padding:20, boxShadow:"0 1px 3px rgba(0,0,0,.06)", borderLeft:`4px solid ${profs.find(p=>p.id===t.profesionalId)?.color || C.violet}` }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12 }}>
-                <div>
-                  <div style={{ fontSize:17, fontWeight:800 }}>{t.cliente}</div>
-                  <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>{t.hora} · {t.servicio} · {profs.find(p=>p.id===t.profesionalId)?.nombre || "—"}</div>
-                  <div style={{ fontSize:12, color:C.violet, marginTop:4, fontWeight:700 }}>Centro/Sala: {getSalaTrabajoTurno(t) || "Sin definir"}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+      {/* ─── CABECERA ──────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: C.text }}>Sala en tiempo real</h2>
+          <p style={{ fontSize: 13, color: C.muted, marginTop: 4, marginBottom: 0 }}>
+            Pacientes esperando y en atención — actualiza cada 30 s
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "10px 18px", textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#1D4ED8", lineHeight: 1 }}>{enEspera.length}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#3B82F6", marginTop: 2 }}>Esperando</div>
+          </div>
+          <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 12, padding: "10px 18px", textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: C.violet, lineHeight: 1 }}>{enAtencion.length}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.violet, marginTop: 2 }}>En atención</div>
+          </div>
+        </div>
+      </div>
+
+      {lista.length === 0 && (
+        <div style={{ background: C.card, borderRadius: 16, padding: 48, textAlign: "center", color: "#94A3B8", fontSize: 14 }}>
+          <Users size={36} color="#CBD5E1" style={{ marginBottom: 12 }}/>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>No hay pacientes en sala</div>
+          <div style={{ fontSize: 12 }}>Desde Agenda, pasá el turno a «A sala» para que aparezca aquí.</div>
+        </div>
+      )}
+
+      {/* ─── SALA DE ESPERA ─────────────────────── */}
+      {enEspera.length > 0 && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#3B82F6", boxShadow: "0 0 0 3px #BFDBFE" }}/>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#1D4ED8", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+              Sala de espera — {enEspera.length} {enEspera.length === 1 ? "paciente" : "pacientes"}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+            {enEspera.map(t => {
+              const prof = profs.find(p => p.id === t.profesionalId)
+              const mins = minutosDesdeTurno(t)
+              return (
+                <div key={t.id} style={{ ...tarjetaBase, background: "#fff", border: "2px solid #BFDBFE", borderLeft: `5px solid ${prof?.color || "#3B82F6"}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{t.cliente}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{t.hora} · Turno #{t.id}</div>
+                    </div>
+                    <TiempoEspera minutos={mins}/>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, background: "#EFF6FF", color: "#1D4ED8", borderRadius: 8, padding: "3px 9px" }}>
+                      {t.servicio || "Sin servicio"}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, background: "#F5F3FF", color: C.violet, borderRadius: 8, padding: "3px 9px" }}>
+                      {prof?.nombre || "Sin especialista"}
+                    </span>
+                    {getSalaTrabajoTurno(t) && (
+                      <span style={{ fontSize: 12, fontWeight: 600, background: "#F0FDF4", color: "#059669", borderRadius: 8, padding: "3px 9px" }}>
+                        {getSalaTrabajoTurno(t)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    <Btn onClick={() => void iniciar(t)} style={{ width: "100%", justifyContent: "center", minHeight: 40 }}>
+                      <MonitorPlay size={14}/> Iniciar atención
+                    </Btn>
+                  </div>
                 </div>
-                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                  <Badge type={t.estado}>{estadoLabel[t.estado] || t.estado}</Badge>
-                  {t.estado === "en_sala" && <Btn onClick={() => void iniciar(t)}><MonitorPlay size={14}/> Iniciar servicio</Btn>}
-                  {t.estado === "en_curso" && (!activo || activo.id !== t.id) && <Btn variant="outline" onClick={() => {
-                    setActivo(t)
-                    setSalaTrabajoActiva(getSalaTrabajoTurno(t) || "Sala 1")
-                    setServicioSel(defaultServicioId(t))
-                    setProtocolo("")
-                    setNotas("")
-                    setQty({})
-                  }}>Continuar sesión</Btn>}
-                  {t.estado === "en_curso" && activo?.id === t.id && <Badge type="en_curso">Sesión abierta</Badge>}
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── EN ATENCIÓN ────────────────────────── */}
+      {enAtencion.length > 0 && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", background: C.violet, animation: "erp-pulse 2s infinite", boxShadow: "0 0 0 3px #DDD6FE" }}/>
+            <span style={{ fontSize: 13, fontWeight: 800, color: C.violet, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+              En atención ahora — {enAtencion.length} {enAtencion.length === 1 ? "paciente" : "pacientes"}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+            {enAtencion.map(t => {
+              const prof = profs.find(p => p.id === t.profesionalId)
+              const mins = minutosDesdeTurno(t)
+              const esActivo = activo?.id === t.id
+              return (
+                <div key={t.id} style={{ ...tarjetaBase, background: "linear-gradient(135deg,#FAF5FF,#F5F3FF)", border: `2px solid ${esActivo ? C.violet : "#DDD6FE"}`, borderLeft: `5px solid ${prof?.color || C.violet}`, position: "relative" }}>
+                  {esActivo && (
+                    <div style={{ position: "absolute", top: 14, right: 14, fontSize: 10, fontWeight: 800, color: "#fff", background: C.violet, borderRadius: 20, padding: "3px 10px", letterSpacing: "0.06em" }}>
+                      SESIÓN ABIERTA
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingRight: esActivo ? 100 : 0 }}>
+                    <div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>{t.cliente}</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{t.hora} · Turno #{t.id}</div>
+                    </div>
+                    <TiempoEspera minutos={mins}/>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, background: "#EDE9FE", color: C.violet, borderRadius: 8, padding: "3px 9px" }}>
+                      {t.servicio || "Sin servicio"}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, background: "#fff", color: C.text, borderRadius: 8, padding: "3px 9px", border: "1px solid #DDD6FE" }}>
+                      {prof?.nombre || "Sin especialista"}
+                    </span>
+                    {getSalaTrabajoTurno(t) && (
+                      <span style={{ fontSize: 12, fontWeight: 600, background: "#F0FDF4", color: "#059669", borderRadius: 8, padding: "3px 9px" }}>
+                        {getSalaTrabajoTurno(t)}
+                      </span>
+                    )}
+                  </div>
+                  {!esActivo && (
+                    <Btn variant="outline" onClick={() => {
+                      setActivo(t)
+                      setSalaTrabajoActiva(getSalaTrabajoTurno(t) || "Sala 1")
+                      setServicioSel(defaultServicioId(t))
+                      setProtocolo("")
+                      setNotas("")
+                      setQty({})
+                    }} style={{ width: "100%", justifyContent: "center", minHeight: 40, marginTop: 4 }}>
+                      Completar orden de servicio
+                    </Btn>
+                  )}
                 </div>
-              </div>
-            </div>
-          ))}
+              )
+            })}
+          </div>
         </div>
       )}
 
