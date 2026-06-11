@@ -1,14 +1,12 @@
-// Copia de vite.config.js (solo los plugins de middleware) usable como módulo Node
+// Middlewares ERP (antes duplicados desde vite.config.js; el front ahora es Next.js).
 // independiente. Se consume desde backend-node/server.js (Express).
 // IMPORTANTE: si agregás o cambiás un middleware, acordate de mantener también
 // aplicacion-web/vite.config.js sincronizado para el entorno de desarrollo.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
 import { createClient } from '@supabase/supabase-js'
 
 const __viteDirname = path.dirname(fileURLToPath(import.meta.url))
-const DEEPFACE_BRIDGE_SCRIPT = path.resolve(__viteDirname, '../face-proportion-overlay/deepface_bridge.py')
 
 /** PostgREST cuando falta la columna en la BD remota (migración no aplicada). */
 export function mapSupabaseSchemaError(msg) {
@@ -133,6 +131,28 @@ Catálogo servicios (cada ítem: id, nombre, precio, categoría) — recorré TO
 Stock insumos (id, nombre) — productos consumibles; coherente con lo dicho pero independiente del servicio facturable: ${stockStr}`
 }
 
+function buildInsumoFotoSystemContent(stockStr, servStr, protocoloStr) {
+  const proto = String(protocoloStr || '').trim().slice(0, 800)
+  return `Eres asistente de inventario clínico para una clínica médico-estética (España). Analizás FOTOS de productos o insumos usados durante un tratamiento (viales, jeringas, ampollas, cajas, etiquetas, blister).
+Responde SOLO un JSON válido (sin markdown):
+{"articulos":[{"stockId":number|null,"nombreDetectado":"string","cantidad":number,"unidad":"string","lote":"string","caducidad":"string","confianza":number,"notas":"string"}],"descripcionGeneral":"string","advertencias":["string"]}
+
+Reglas:
+- Identificá cada producto visible: marca, principio activo, presentación, volumen o unidades en etiqueta.
+- stockId: id numérico del catálogo de stock SOLO si hay coincidencia clara por nombre, marca o tipo; null si no hay match razonable.
+- cantidad: consumo estimado según la foto (vial parcial → decimal; jeringa → ml; ampolla entera → 1). Si no se puede estimar, 1 con confianza baja y explicación en notas.
+- unidad: ml, U, unidades, ampolla, vial, etc.
+- lote y caducidad: solo si son legibles; si no, cadena vacía.
+- confianza: número 0-1 según claridad del match y de la lectura.
+- Puede haber varios artículos en una misma foto.
+- advertencias: lectura difícil, producto fuera de catálogo, caducidad próxima si se lee, foto borrosa.
+- No inventes productos que no se vean en la imagen.
+
+Catálogo stock (id, nombre): ${stockStr}
+Servicios de la sesión (referencia): ${servStr}
+${proto ? `Protocolo aplicado (contexto): ${proto}` : ''}`
+}
+
 function buildResultadoSesionSystemContent(protocoloSnippet) {
   const ctx = String(protocoloSnippet || "").trim().slice(0, 1200)
   return `Eres asistente clínico para una clínica médico-estética (España). El profesional describe el RESULTADO inmediato o la evolución tras el tratamiento en esta sesión (no la valoración previa).
@@ -145,6 +165,106 @@ ${ctx ? `Contexto opcional (protocolo de la sesión): ${ctx}` : ""}`
 /** Proxy API de IA: la clave no sale al navegador y se evita CORS. */
 export function openaiProxiesPlugin(openaiKey) {
   const mount = (server) => {
+    /** Pass-through a OpenAI Chat Completions (agente BS CLINIQ, visión, etc.) */
+    server.middlewares.use('/api/openai/chat-completions', (req, res, next) => {
+      if (req.method !== 'POST') return next()
+      const chunks = []
+      req.on('data', (c) => chunks.push(c))
+      req.on('end', async () => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          if (!openaiKey) {
+            res.statusCode = 503
+            return res.end(
+              JSON.stringify({
+                error: {
+                  message:
+                    'Configurá la clave de API de IA en .env / .env.local y reiniciá el servidor (OPENAI_API_KEY en backend).',
+                },
+              }),
+            )
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          const { model, messages, temperature, max_tokens, max_completion_tokens, response_format } = body
+          if (!model || !Array.isArray(messages)) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ error: { message: 'Falta model o messages' } }))
+          }
+          const isGpt5 = /^gpt-5/i.test(String(model))
+          const out = { model, messages }
+          if (typeof temperature === 'number') out.temperature = temperature
+          if (response_format) out.response_format = response_format
+          if (isGpt5) {
+            if (Number.isFinite(max_completion_tokens)) out.max_completion_tokens = max_completion_tokens
+          } else {
+            if (Number.isFinite(max_tokens)) out.max_tokens = max_tokens
+            if (Number.isFinite(max_completion_tokens)) out.max_completion_tokens = max_completion_tokens
+          }
+          const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openaiKey}`,
+            },
+            body: JSON.stringify(out),
+          })
+          const buf = await r.text()
+          res.statusCode = r.status
+          res.end(buf)
+        } catch (e) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: { message: String(e?.message || e) } }))
+        }
+      })
+    })
+
+    /** Transcripción: body JSON { b64, filename, mime, model?, language? } */
+    server.middlewares.use('/api/openai/audio-transcribe', (req, res, next) => {
+      if (req.method !== 'POST') return next()
+      const chunks = []
+      req.on('data', (c) => chunks.push(c))
+      req.on('end', async () => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          if (!openaiKey) {
+            res.statusCode = 503
+            return res.end(
+              JSON.stringify({
+                error: {
+                  message:
+                    'Configurá la clave de API de IA en .env / .env.local y reiniciá el servidor (OPENAI_API_KEY en backend).',
+                },
+              }),
+            )
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          const b64 = body.b64
+          const filename = String(body.filename || 'audio.ogg')
+          const mime = String(body.mime || 'audio/ogg')
+          if (!b64) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ error: { message: 'Falta b64' } }))
+          }
+          const buf = Buffer.from(String(b64), 'base64')
+          const form = new FormData()
+          form.append('file', new Blob([buf], { type: mime }), filename)
+          form.append('model', String(body.model || 'whisper-1'))
+          if (body.language) form.append('language', String(body.language))
+          const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${openaiKey}` },
+            body: form,
+          })
+          const bufOut = await r.text()
+          res.statusCode = r.status
+          res.end(bufOut)
+        } catch (e) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: { message: String(e?.message || e) } }))
+        }
+      })
+    })
+
     server.middlewares.use('/api/openai/resultado-sesion', (req, res, next) => {
       if (req.method !== "POST") return next()
       const chunks = []
@@ -520,6 +640,99 @@ Catálogo servicios: ${catStr}`,
       })
     })
 
+    /** Foto de insumo usado → identificación + cantidad + lote (visión). */
+    server.middlewares.use('/api/openai/insumo-foto', (req, res, next) => {
+      if (req.method !== 'POST') return next()
+      const chunks = []
+      req.on('data', (c) => { chunks.push(c) })
+      req.on('end', async () => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          if (!openaiKey) {
+            res.statusCode = 503
+            return res.end(JSON.stringify({
+              ok: false,
+              error: 'Configurá OPENAI_API_KEY en .env.local y reiniciá el servidor.',
+            }))
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          const { imageBase64, stock, servicios, protocolo } = body
+          if (!imageBase64 || typeof imageBase64 !== 'string') {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ ok: false, error: 'Falta imageBase64' }))
+          }
+          const dataUrl = imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`
+          const stockStr = JSON.stringify((stock || []).map(s => ({
+            id: s.id,
+            nombre: s.nombre,
+            unidad: s.unidad || '',
+          })))
+          const servStr = JSON.stringify((servicios || []).map(s => ({
+            id: s.id,
+            nombre: s.nombre,
+          })))
+          const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openaiKey}`,
+            },
+            body: JSON.stringify({
+              model: OPENAI_MODEL_VISION,
+              response_format: { type: 'json_object' },
+              max_completion_tokens: 4096,
+              messages: [
+                {
+                  role: 'system',
+                  content: buildInsumoFotoSystemContent(stockStr, servStr, protocolo),
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Analizá esta foto del insumo o insumos usados en la sesión clínica. Devolvé el JSON pedido.',
+                    },
+                    { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+                  ],
+                },
+              ],
+            }),
+          })
+          const raw = await r.text()
+          if (!r.ok) {
+            res.statusCode = r.status
+            try {
+              const j = JSON.parse(raw)
+              return res.end(JSON.stringify({ ok: false, error: j.error?.message || raw }))
+            } catch {
+              return res.end(JSON.stringify({ ok: false, error: raw || `Error HTTP ${r.status}` }))
+            }
+          }
+          let parsed = null
+          try {
+            const payload = JSON.parse(raw)
+            const content = payload.choices?.[0]?.message?.content
+            parsed = typeof content === 'string' ? JSON.parse(content) : content
+          } catch (e) {
+            res.statusCode = 502
+            return res.end(JSON.stringify({ ok: false, error: 'Respuesta IA inválida: ' + String(e?.message || e) }))
+          }
+          if (!parsed || typeof parsed !== 'object') {
+            res.statusCode = 502
+            return res.end(JSON.stringify({ ok: false, error: 'Respuesta vacía del modelo' }))
+          }
+          if (!Array.isArray(parsed.articulos)) parsed.articulos = []
+          if (!Array.isArray(parsed.advertencias)) parsed.advertencias = []
+          res.statusCode = 200
+          res.end(JSON.stringify({ ok: true, ...parsed }))
+        } catch (e) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
+        }
+      })
+    })
+
     server.middlewares.use('/api/openai/face-landmarks', (req, res, next) => {
       if (req.method !== 'POST') return next()
       const chunks = []
@@ -691,367 +904,17 @@ Sé lo más preciso posible con las coordenadas.`
   }
 }
 
-/** DeepFace vía Python (face-proportion-overlay/deepface_bridge.py)
- *  o vía servicio HTTP remoto (Render) si se define DEEPFACE_REMOTE_URL. */
-export function deepfaceBridgePlugin(opts = {}) {
-  const python = process.env.PYTHON || 'python3'
-  const requestTimeoutMs = 60000
-
-  // ─── Modo remoto (servicio HTTP tipo FastAPI en Render) ───
-  const remoteUrlRaw = (opts.remoteUrl || process.env.DEEPFACE_REMOTE_URL || '').trim()
-  const remoteToken = (opts.remoteToken || process.env.DEEPFACE_REMOTE_TOKEN || '').trim()
-  const useRemote = Boolean(remoteUrlRaw)
-  const remoteBase = useRemote ? remoteUrlRaw.replace(/\/+$/, '') : ''
-
-  if (useRemote) {
-    console.info(`[deepface-bridge] Modo remoto activo → ${remoteBase}`)
-    const remoteAnalyze = async (b64) => {
-      const ctrl = new AbortController()
-      const t = setTimeout(() => ctrl.abort(), requestTimeoutMs)
-      try {
-        const headers = { 'Content-Type': 'application/json' }
-        if (remoteToken) headers['Authorization'] = `Bearer ${remoteToken}`
-        const resp = await fetch(`${remoteBase}/analyze`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ image_base64: b64 }),
-          signal: ctrl.signal,
-        })
-        const text = await resp.text()
-        let j
-        try { j = JSON.parse(text) } catch {
-          throw new Error(`Respuesta no-JSON del servicio DeepFace (HTTP ${resp.status})`)
-        }
-        if (!resp.ok) {
-          throw new Error(j?.error || j?.detail || `HTTP ${resp.status}`)
-        }
-        if (j && j.ok === false) {
-          throw new Error(j.error || 'DeepFace error')
-        }
-        return j
-      } finally {
-        clearTimeout(t)
-      }
-    }
-    const remoteStatus = async () => {
-      const ctrl = new AbortController()
-      const t = setTimeout(() => ctrl.abort(), 8000)
-      try {
-        const resp = await fetch(`${remoteBase}/status`, { signal: ctrl.signal })
-        const j = await resp.json().catch(() => ({}))
-        return {
-          ok: resp.ok && j?.ok !== false,
-          running: true,
-          ready: !!j?.ready,
-          warming: !!j?.warming,
-          pending: 0,
-          queued: 0,
-          remote: remoteBase,
-          error: j?.error || (resp.ok ? undefined : `HTTP ${resp.status}`),
-        }
-      } catch (e) {
-        return {
-          ok: false,
-          running: false,
-          ready: false,
-          warming: false,
-          pending: 0,
-          queued: 0,
-          remote: remoteBase,
-          error: String(e?.message || e),
-        }
-      } finally {
-        clearTimeout(t)
-      }
-    }
-    const mountRemote = (server) => {
-      server.middlewares.use('/api/deepface/status', (req, res, next) => {
-        if (req.method !== 'GET') return next()
-        res.setHeader('Content-Type', 'application/json; charset=utf-8')
-        remoteStatus().then((s) => {
-          res.statusCode = 200
-          res.end(JSON.stringify(s))
-        })
-      })
-      server.middlewares.use('/api/deepface', (req, res, next) => {
-        if (req.method !== 'POST') return next()
-        const chunks = []
-        req.on('data', (c) => { chunks.push(c) })
-        req.on('end', async () => {
-          res.setHeader('Content-Type', 'application/json; charset=utf-8')
-          let body
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-          } catch {
-            res.statusCode = 400
-            return res.end(JSON.stringify({ error: 'JSON inválido' }))
-          }
-          const b64 = (body.image_base64 || '').trim()
-          if (!b64) {
-            res.statusCode = 400
-            return res.end(JSON.stringify({ error: 'image_base64 vacío' }))
-          }
-          try {
-            const j = await remoteAnalyze(b64)
-            res.statusCode = 200
-            return res.end(JSON.stringify(j))
-          } catch (e) {
-            res.statusCode = 502
-            return res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
-          }
-        })
-      })
-    }
-    return {
-      name: 'deepface-bridge',
-      configureServer: mountRemote,
-      configurePreviewServer: mountRemote,
-      api: {
-        analyze: remoteAnalyze,
-        status: remoteStatus,
-        ensureStarted: () => { /* no-op en modo remoto */ },
-      },
-    }
-  }
-
-  let worker = null
-  let workerStdoutBuf = ''
-  let workerReady = false
-  let workerWarming = false
-  let workerFatal = ''
-  let currentJob = null
-  const queue = []
-  let nextId = 1
-  const pendingById = new Map()
-
-  const failJob = (job, message) => {
-    if (!job) return
-    if (job.timer) clearTimeout(job.timer)
-    job.reject(new Error(message))
-  }
-
-  const failAll = (message) => {
-    if (currentJob) {
-      const j = currentJob
-      currentJob = null
-      failJob(j, message)
-    }
-    for (const j of pendingById.values()) failJob(j, message)
-    pendingById.clear()
-    while (queue.length) failJob(queue.shift(), message)
-  }
-
-  const resolveJob = (job, payload) => {
-    if (!job) return
-    if (job.timer) clearTimeout(job.timer)
-    job.resolve(payload)
-  }
-
-  const spawnWorker = () => {
-    if (worker) return worker
-    workerStdoutBuf = ''
-    workerReady = false
-    workerWarming = false
-    workerFatal = ''
-    try {
-      worker = spawn(python, [DEEPFACE_BRIDGE_SCRIPT, '--serve'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
-      })
-    } catch (e) {
-      workerFatal = `No se pudo ejecutar Python (${python}): ${String(e?.message || e)}`
-      worker = null
-      return null
-    }
-    worker.stderr.on('data', (d) => {
-      const s = d.toString()
-      if (s.includes('[deepface_bridge]')) process.stderr.write(s)
-    })
-    worker.stdout.on('data', (chunk) => {
-      workerStdoutBuf += chunk.toString()
-      const lines = workerStdoutBuf.split('\n')
-      workerStdoutBuf = lines.pop() || ''
-      for (const line of lines) {
-        const raw = line.trim()
-        if (!raw) continue
-        let j
-        try { j = JSON.parse(raw) } catch {
-          if (currentJob) {
-            const job = currentJob
-            currentJob = null
-            failJob(job, 'Respuesta inválida del análisis DeepFace')
-          }
-          continue
-        }
-        if (j && typeof j === 'object' && j.event) {
-          if (j.event === 'starting') { workerReady = false; workerWarming = false; continue }
-          if (j.event === 'ready') {
-            workerReady = true
-            workerWarming = !!j.warming
-            if (!workerWarming) pump()
-            continue
-          }
-          if (j.event === 'fatal') {
-            workerFatal = String(j.error || 'DeepFace fatal')
-            failAll(workerFatal)
-            try { worker?.kill('SIGKILL') } catch { /* ignore */ }
-            worker = null
-            continue
-          }
-          continue
-        }
-        let job = null
-        if (j && typeof j === 'object' && j.id != null && pendingById.has(j.id)) {
-          job = pendingById.get(j.id)
-          pendingById.delete(j.id)
-          if (currentJob === job) currentJob = null
-        } else if (currentJob) {
-          job = currentJob
-          currentJob = null
-        }
-        if (!job) continue
-        if (j?.ok === false) failJob(job, j.error || 'DeepFace error')
-        else resolveJob(job, j)
-      }
-      pump()
-    })
-    worker.on('error', (e) => {
-      workerFatal = `No se pudo ejecutar Python (${python}). Instalá Python 3 o definí PYTHON en .env.local. ${e}`
-      worker = null
-      workerReady = false
-      failAll(workerFatal)
-    })
-    worker.on('close', (code) => {
-      const msg = code === 0
-        ? 'Proceso DeepFace finalizado'
-        : `El proceso Python DeepFace terminó con código ${code}`
-      worker = null
-      workerReady = false
-      workerWarming = false
-      failAll(msg)
-    })
-    return worker
-  }
-
-  const pump = () => {
-    if (currentJob || queue.length === 0) return
-    const proc = spawnWorker()
-    if (!proc) {
-      failAll(workerFatal || 'DeepFace no disponible')
-      return
-    }
-    if (!workerReady || workerWarming) return
-    if (!proc.stdin || proc.stdin.destroyed) {
-      failAll('DeepFace no disponible: stdin del worker cerrado')
-      return
-    }
-    const job = queue.shift()
-    currentJob = job
-    const id = nextId++
-    job.id = id
-    pendingById.set(id, job)
-    job.timer = setTimeout(() => {
-      if (pendingById.get(id) === job) pendingById.delete(id)
-      if (currentJob === job) currentJob = null
-      failJob(job, 'DeepFace demoró demasiado en responder')
-      pump()
-    }, requestTimeoutMs)
-    try {
-      proc.stdin.write(`${JSON.stringify({ id, image_base64: job.b64 })}\n`)
-    } catch (e) {
-      pendingById.delete(id)
-      if (currentJob === job) currentJob = null
-      failJob(job, `No se pudo enviar imagen al worker DeepFace: ${String(e?.message || e)}`)
-      pump()
-    }
-  }
-
-  const analyze = (b64) => new Promise((resolve, reject) => {
-    queue.push({ b64, resolve, reject, timer: null, id: null })
-    pump()
-  })
-
-  const status = () => ({
-    ok: !workerFatal,
-    running: !!worker,
-    ready: workerReady && !workerWarming,
-    warming: workerWarming,
-    pending: pendingById.size,
-    queued: queue.length,
-    error: workerFatal || undefined,
-  })
-
-  const ensureStarted = () => {
-    if (!worker && !workerFatal) spawnWorker()
-  }
-
-  const mount = (server) => {
-    // Arranca Python ni bien inicia el dev server: los modelos se cargan en background.
-    ensureStarted()
-
-    server.middlewares.use('/api/deepface/status', (req, res, next) => {
-      if (req.method !== 'GET') return next()
-      res.setHeader('Content-Type', 'application/json; charset=utf-8')
-      res.statusCode = 200
-      res.end(JSON.stringify(status()))
-    })
-
-    server.middlewares.use('/api/deepface', (req, res, next) => {
-      if (req.method !== 'POST') return next()
-      const chunks = []
-      req.on('data', (c) => { chunks.push(c) })
-      req.on('end', async () => {
-        res.setHeader('Content-Type', 'application/json; charset=utf-8')
-        let body
-        try {
-          body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-        } catch {
-          res.statusCode = 400
-          return res.end(JSON.stringify({ error: 'JSON inválido' }))
-        }
-        const b64 = (body.image_base64 || '').trim()
-        if (!b64) {
-          res.statusCode = 400
-          return res.end(JSON.stringify({ error: 'image_base64 vacío' }))
-        }
-        try {
-          const j = await analyze(b64)
-          res.statusCode = 200
-          return res.end(JSON.stringify(j))
-        } catch (e) {
-          res.statusCode = 500
-          return res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
-        }
-      })
-    })
-    server.httpServer?.on?.('close', () => {
-      try { worker?.kill('SIGKILL') } catch { /* ignore */ }
-      worker = null
-      failAll('Worker DeepFace cerrado')
-    })
-  }
-  return {
-    name: 'deepface-bridge',
-    configureServer: mount,
-    configurePreviewServer: mount,
-    api: { analyze, status, ensureStarted },
-  }
-}
-
-/**
- * Combina DeepFace (local) + OpenAI Vision → análisis clínico-estético.
- * Requiere deepfacePlugin (para reusar su worker Python) y la clave OpenAI.
- */
-export function faceAnalysisFullPlugin(openaiKey, deepfacePlugin) {
+/** Análisis clínico-estético del rostro (solo OpenAI Vision, sin DeepFace). */
+export function faceClinicalOpenAiPlugin(openaiKey) {
   const buildSystemPrompt = () => (
     `Eres asistente clínico-estético para una clínica médico-estética (España). Análisis asistido por IA de una fotografía de rostro.
-Recibes una imagen del paciente y datos objetivos obtenidos con DeepFace (edad estimada, emoción, etc). Devuelve SOLO un JSON válido con esta forma exacta:
+Devuelve SOLO un JSON válido con esta forma exacta:
 {
   "tipoPiel": "seca|mixta|grasa|sensible|madura|normal|indeterminada",
   "fototipo": "I|II|III|IV|V|VI|indeterminado",
   "hidratacion": "baja|media|alta|indeterminada",
   "luminosidad": "apagada|normal|radiante|indeterminada",
-  "simetria": "string (descripción breve en español)",
+  "simetria": "string",
   "arrugas": ["string"],
   "manchas": "string",
   "porosYTextura": "string",
@@ -1062,31 +925,14 @@ Recibes una imagen del paciente y datos objetivos obtenidos con DeepFace (edad e
   "alertas": ["string"],
   "disclaimer": "Análisis estético asistido por IA; no reemplaza valoración médica presencial."
 }
-Reglas:
-- Español (España), tono clínico y claro.
-- Describe SOLO lo que sea observable en la foto; si algo no se puede determinar, pon "indeterminada" / "indeterminado" o cadena vacía.
-- Recomendaciones: 3 a 6 ítems breves (rutina cosmética, tratamientos sugeridos, cuidados). No recetes fármacos ni dosis.
-- Alertas: lesiones sospechosas, asimetrías marcadas, signos que ameriten derivación (si aplica).
-- No inventes la edad; usá la edad aportada por DeepFace como contexto.
-- NUNCA devuelvas texto fuera del JSON.`
+Reglas: español (España), tono clínico, solo lo observable en la foto. NUNCA texto fuera del JSON.`
   )
 
-  const callOpenAiVision = async (imageB64, deepfaceData) => {
+  const callOpenAiVision = async (imageB64) => {
     if (!openaiKey) throw new Error('Falta OPENAI_API_KEY en el servidor')
-    const df = deepfaceData || {}
-    const ctx = JSON.stringify({
-      edad: df.age,
-      genero: df.dominant_gender,
-      emocion: df.dominant_emotion,
-      etnia: df.dominant_race,
-      face_confidence: df.face_confidence,
-    })
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openaiKey}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiKey}` },
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
@@ -1094,7 +940,7 @@ Reglas:
           {
             role: 'user',
             content: [
-              { type: 'text', text: `Datos DeepFace (contexto objetivo): ${ctx}. Analizá el rostro de la imagen.` },
+              { type: 'text', text: 'Analizá el rostro de la imagen para valoración estética clínica.' },
               { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageB64}`, detail: 'low' } },
             ],
           },
@@ -1107,7 +953,7 @@ Reglas:
     const text = await resp.text()
     if (!resp.ok) {
       let detail = text
-      try { detail = JSON.parse(text)?.error?.message || text } catch { /* keep raw */ }
+      try { detail = JSON.parse(text)?.error?.message || text } catch { /* keep */ }
       throw new Error(`OpenAI Vision: ${detail}`)
     }
     let parsed
@@ -1130,43 +976,20 @@ Reglas:
             res.statusCode = 400
             return res.end(JSON.stringify({ ok: false, error: 'image_base64 vacío' }))
           }
-          const includeAi = body.includeAi !== false
-          const deepfaceApi = deepfacePlugin?.api
-          if (!deepfaceApi?.analyze) {
-            res.statusCode = 500
-            return res.end(JSON.stringify({ ok: false, error: 'DeepFace no disponible en el servidor' }))
-          }
-          let df = null
-          let dfError = null
-          try {
-            df = await deepfaceApi.analyze(b64)
-          } catch (e) {
-            dfError = String(e?.message || e)
-          }
-          if (!df || df.face_found === false) {
-            res.statusCode = 200
-            return res.end(JSON.stringify({
-              ok: true,
-              face_found: false,
-              deepface: df || null,
-              deepfaceError: dfError,
-            }))
+          if (body.includeAi === false) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ ok: false, error: 'Análisis clínico requiere IA activa' }))
           }
           let clinico = null
           let clinicoError = null
-          if (includeAi) {
-            try { clinico = await callOpenAiVision(b64, df) }
-            catch (e) { clinicoError = String(e?.message || e) }
+          try { clinico = await callOpenAiVision(b64) }
+          catch (e) { clinicoError = String(e?.message || e) }
+          if (!clinico) {
+            res.statusCode = 200
+            return res.end(JSON.stringify({ ok: false, face_found: false, clinico: null, clinicoError: clinicoError || 'No se pudo analizar' }))
           }
           res.statusCode = 200
-          res.end(JSON.stringify({
-            ok: true,
-            face_found: true,
-            deepface: df,
-            deepfaceError: dfError,
-            clinico,
-            clinicoError,
-          }))
+          res.end(JSON.stringify({ ok: true, face_found: true, clinico, clinicoError }))
         } catch (e) {
           res.statusCode = 500
           res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
@@ -1174,11 +997,234 @@ Reglas:
       })
     })
   }
-  return {
-    name: 'face-analysis-full',
-    configureServer: mount,
-    configurePreviewServer: mount,
+  return { name: 'face-clinical-openai', configureServer: mount, configurePreviewServer: mount }
+}
+
+const OPENAI_PLAN_MODEL = 'gpt-4o'
+const OPENAI_IMAGE_MODEL = 'gpt-image-2'
+
+const CLINICAL_TREATMENT_PLAN_SYSTEM = `Eres médico estético en consulta (España). Analizás la foto REAL del paciente y el tratamiento indicado.
+Definís plan clínico y zonas precisas para edición enmascarada (solo esas áreas se retocan).
+Devolvé SOLO JSON válido:
+{
+  "titulo": "nombre breve del plan",
+  "expectativaClinica": "2-4 frases: qué se busca lograr de forma realista y conservadora",
+  "promptEdicionZonas": "instrucción breve para retocar SOLO las zonas enmascaradas (máx 300 caracteres)",
+  "zonasMarcado": [
+    { "id": "mandibula", "label": "Mandíbula", "x": 42, "y": 78, "rx": 9, "ry": 7 }
+  ],
+  "notasPaciente": "1-2 frases claras para explicar al paciente en consulta",
+  "disclaimer": "Simulación orientativa en zonas del tratamiento; el resultado real se confirma con foto posterior."
+}
+Reglas para zonasMarcado:
+- x,y,rx,ry son porcentajes 0-100 sobre la imagen completa (x=izquierda→derecha, y=arriba→abajo).
+- Máximo 5 zonas, solo las estrictamente relacionadas al tratamiento. rx/ry entre 4 y 14 (zonas acotadas).
+- No exageres expectativas. Tono clínico, respetuoso.`
+
+function readImageDimensions(buf) {
+  if (!buf || buf.length < 24) return null
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
   }
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) { i++; continue }
+      const marker = buf[i + 1]
+      if (marker === 0xc0 || marker === 0xc2 || marker === 0xc1) {
+        return { h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) }
+      }
+      const len = buf.readUInt16BE(i + 2)
+      if (len < 2) break
+      i += 2 + len
+    }
+  }
+  return null
+}
+
+function pickEditSize(buf) {
+  const dim = readImageDimensions(buf)
+  if (!dim?.w || !dim?.h) return '1024x1536'
+  const ratio = dim.w / dim.h
+  if (ratio > 1.12) return '1536x1024'
+  if (ratio < 0.88) return '1024x1536'
+  return '1024x1024'
+}
+
+function buildMaskEditPrompt(plan, tratamiento) {
+  const zones = Array.isArray(plan?.zonasMarcado) ? plan.zonasMarcado.map(z => z.label).filter(Boolean).join(', ') : ''
+  const expect = String(plan?.expectativaClinica || '').trim()
+  const zonePrompt = String(plan?.promptEdicionZonas || expect).trim().slice(0, 400)
+  return (
+    'Edita ÚNICAMENTE las regiones transparentes de la máscara (inpainting clínico). ' +
+    'El resto de la fotografía debe permanecer idéntico pixel a pixel: identidad, ojos, nariz, pelo, fondo, iluminación, textura de piel, poros y vello. ' +
+    'PROHIBIDO: filtro belleza, piel plástica, cambiar rasgos fuera de la máscara, exagerar volumen. ' +
+    `Tratamiento: ${String(tratamiento || '').trim().slice(0, 350)}. ` +
+    (zones ? `Zonas enmascaradas: ${zones}. ` : '') +
+    `Objetivo sutil en esas zonas: ${zonePrompt}`
+  )
+}
+
+/** Plan clínico (Vision) + preview en zonas con gpt-image-2 (máscara, sin retocar todo el rostro). */
+export function treatmentPreviewPlugin(openaiKey) {
+  const buildClinicalPlan = async (imageB64, tratamiento, zona) => {
+    if (!openaiKey) throw new Error('Falta OPENAI_API_KEY en el servidor')
+    const z =
+      zona === 'corporal' ? 'cuerpo' : zona === 'facial' ? 'rostro' : 'rostro o cuerpo según la foto'
+    const t = String(tratamiento || '').trim().slice(0, 1800)
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model: OPENAI_PLAN_MODEL,
+        messages: [
+          { role: 'system', content: CLINICAL_TREATMENT_PLAN_SYSTEM },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text:
+                  `Zona: ${z}.\nTratamiento / protocolo: ${t}\n` +
+                  'Definí plan clínico y zonas acotadas para edición enmascarada con gpt-image-2.',
+              },
+              {
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${imageB64}`, detail: 'high' },
+              },
+            ],
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 1000,
+        temperature: 0.15,
+      }),
+    })
+    const text = await resp.text()
+    if (!resp.ok) {
+      let detail = text
+      try { detail = JSON.parse(text)?.error?.message || text } catch { /* keep */ }
+      throw new Error(`Plan clínico: ${detail}`)
+    }
+    let parsed
+    try { parsed = JSON.parse(text) } catch { throw new Error('Respuesta inválida del plan clínico') }
+    const content = parsed?.choices?.[0]?.message?.content || ''
+    let plan
+    try { plan = JSON.parse(content) } catch { throw new Error('El plan clínico no devolvió JSON válido') }
+    if (!Array.isArray(plan.zonasMarcado)) plan.zonasMarcado = []
+    plan.zonasMarcado = plan.zonasMarcado
+      .filter(z => z && typeof z.x === 'number' && typeof z.y === 'number')
+      .slice(0, 5)
+      .map(z => ({
+        id: String(z.id || z.label || 'zona'),
+        label: String(z.label || z.id || 'Zona').slice(0, 40),
+        x: Math.max(0, Math.min(100, Number(z.x))),
+        y: Math.max(0, Math.min(100, Number(z.y))),
+        rx: Math.max(4, Math.min(14, Number(z.rx) || 8)),
+        ry: Math.max(4, Math.min(14, Number(z.ry) || 6)),
+      }))
+    return plan
+  }
+
+  const callImageEditMasked = async (imageBuf, maskBuf, mime, prompt) => {
+    if (!openaiKey) throw new Error('Falta OPENAI_API_KEY en el servidor')
+    const size = pickEditSize(imageBuf)
+    const form = new FormData()
+    form.append('model', OPENAI_IMAGE_MODEL)
+    form.append('image', new Blob([imageBuf], { type: mime }), mime.includes('png') ? 'photo.png' : 'photo.jpg')
+    form.append('mask', new Blob([maskBuf], { type: 'image/png' }), 'mask.png')
+    form.append('prompt', prompt.slice(0, 3200))
+    form.append('size', size)
+    form.append('quality', 'high')
+    // gpt-image-2: no usar input_fidelity (alta fidelidad automática; el param falla)
+    const resp = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${openaiKey}` },
+      body: form,
+    })
+    const text = await resp.text()
+    if (!resp.ok) {
+      let detail = text
+      try { detail = JSON.parse(text)?.error?.message || text } catch { /* keep */ }
+      throw new Error(`OpenAI ${OPENAI_IMAGE_MODEL}: ${detail}`)
+    }
+    let parsed
+    try { parsed = JSON.parse(text) } catch { throw new Error('Respuesta inválida de OpenAI Images') }
+    const item = parsed?.data?.[0]
+    if (!item) throw new Error('OpenAI no devolvió imagen')
+    if (item.b64_json) return { image_base64: item.b64_json, mime: 'image/png', size }
+    if (item.url) return { image_url: item.url, mime: 'image/png', size }
+    throw new Error('Formato de imagen no reconocido en la respuesta')
+  }
+
+  const mount = (server) => {
+    server.middlewares.use('/api/treatment-preview', (req, res, next) => {
+      if (req.method !== 'POST') return next()
+      const chunks = []
+      req.on('data', c => chunks.push(c))
+      req.on('end', async () => {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+          const b64 = String(body.image_base64 || '').trim()
+          const tratamiento = String(body.tratamiento || body.protocolo || '').trim()
+          const zona = String(body.zona || 'facial').trim().toLowerCase()
+          const maskB64 = String(body.mask_base64 || '').trim()
+          const renderOnly = body.render === true && body.plan && maskB64
+
+          if (!b64) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ ok: false, error: 'image_base64 vacío' }))
+          }
+          if (!tratamiento && !renderOnly) {
+            res.statusCode = 400
+            return res.end(JSON.stringify({ ok: false, error: 'Indicá el tratamiento o protocolo' }))
+          }
+
+          let plan = body.plan
+          if (!renderOnly) {
+            plan = await buildClinicalPlan(b64, tratamiento, zona)
+          }
+
+          const out = {
+            ok: true,
+            mode: 'clinical_plan',
+            provider: 'openai',
+            planModel: OPENAI_PLAN_MODEL,
+            imageModel: OPENAI_IMAGE_MODEL,
+            plan,
+            preview: null,
+            previewError: null,
+            disclaimer:
+              plan?.disclaimer ||
+              'Simulación orientativa en zonas del tratamiento; no garantiza el resultado real.',
+          }
+
+          if (maskB64 && Array.isArray(plan?.zonasMarcado) && plan.zonasMarcado.length > 0) {
+            try {
+              const raw = Buffer.from(b64, 'base64')
+              const maskRaw = Buffer.from(maskB64, 'base64')
+              if (raw.length > 8 * 1024 * 1024) throw new Error('La imagen supera 8MB')
+              const mime = body.mime === 'image/png' ? 'image/png' : 'image/jpeg'
+              const prompt = buildMaskEditPrompt(plan, tratamiento || plan.titulo || '')
+              const preview = await callImageEditMasked(raw, maskRaw, mime, prompt)
+              out.preview = preview
+              out.mode = 'clinical_plan_with_preview'
+            } catch (e) {
+              out.previewError = String(e?.message || e)
+            }
+          }
+
+          res.statusCode = 200
+          res.end(JSON.stringify(out))
+        } catch (e) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }))
+        }
+      })
+    })
+  }
+  return { name: 'treatment-preview', configureServer: mount, configurePreviewServer: mount }
 }
 
 /** Solo gerente: crea usuario en Auth + fila en empleados (requiere SUPABASE_SERVICE_ROLE_KEY en .env.local). */
@@ -1501,7 +1547,20 @@ export function bootstrapGerentePlugin(supabaseUrl, serviceRoleKey, signupSecret
   }
 }
 
-export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
+function normalizeWhatsAppE164(digits) {
+  let d = String(digits || '').replace(/\D/g, '')
+  if (!d) return ''
+  if (d.length === 10 && !d.startsWith('54')) d = '54' + d
+  return d
+}
+
+export function erpOperationsPlugin(supabaseUrl, serviceRoleKey, marketing = {}) {
+  const mEnv = {
+    waToken: marketing.waToken || '',
+    waPhoneId: marketing.waPhoneId || '',
+    waVerify: marketing.waVerify || '',
+    waApiVersion: (marketing.waApiVersion || 'v21.0').replace(/^v?/, 'v'),
+  }
   const mount = (server) => {
     server.middlewares.use('/api/erp', (req, res, next) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -1584,24 +1643,133 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
 
       ;(async () => {
         try {
+          if (pathNorm === '/api/erp/marketing/whatsapp/webhook') {
+            if (req.method === 'GET') {
+              const sp = new URL(req.url || '/', 'http://localhost').searchParams
+              const mode = sp.get('hub.mode')
+              const vtoken = sp.get('hub.verify_token')
+              const challenge = sp.get('hub.challenge')
+              if (mode === 'subscribe' && mEnv.waVerify && vtoken === mEnv.waVerify && challenge) {
+                res.statusCode = 200
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+                return res.end(challenge)
+              }
+              return sendJson(403, { error: 'Verificación webhook inválida. Revisá WHATSAPP_WEBHOOK_VERIFY_TOKEN.' })
+            }
+            if (req.method === 'POST') {
+              await parseBody()
+              res.statusCode = 200
+              res.setHeader('Content-Type', 'application/json; charset=utf-8')
+              return res.end(JSON.stringify({ ok: true }))
+            }
+          }
+
+          if (req.method === 'GET' && pathNorm === '/api/erp/marketing/whatsapp/status') {
+            const auth = await withAuth()
+            if (auth.error) return sendJson(auth.code, { error: auth.error })
+            const denied = requireRole(auth, ['gerente', 'encargado', 'recepcionista'])
+            if (denied) return sendJson(denied.code, { error: denied.error })
+            const pid = String(mEnv.waPhoneId || '')
+            const masked = pid.length > 4 ? `****${pid.slice(-4)}` : (pid ? '****' : '')
+            return sendJson(200, {
+              ok: true,
+              cloudApiReady: Boolean(mEnv.waToken && mEnv.waPhoneId),
+              phoneNumberIdMasked: masked,
+              graphVersion: mEnv.waApiVersion,
+            })
+          }
+
+          if (req.method === 'POST' && pathNorm === '/api/erp/marketing/whatsapp/send-text') {
+            const auth = await withAuth()
+            if (auth.error) return sendJson(auth.code, { error: auth.error })
+            const denied = requireRole(auth, ['gerente', 'encargado', 'recepcionista'])
+            if (denied) return sendJson(denied.code, { error: denied.error })
+            if (!mEnv.waToken || !mEnv.waPhoneId) {
+              return sendJson(503, {
+                error: 'Falta WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID en el servidor (.env o hosting).',
+              })
+            }
+            const body = await parseBody()
+            const to = normalizeWhatsAppE164(body.to)
+            const text = String(body.text || '').trim()
+            if (!to || !text) return sendJson(400, { error: 'to y text requeridos' })
+            const url = `https://graph.facebook.com/${mEnv.waApiVersion}/${mEnv.waPhoneId}/messages`
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${mEnv.waToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to,
+                type: 'text',
+                text: { preview_url: false, body: text.slice(0, 4096) },
+              }),
+            })
+            const j = await r.json().catch(() => ({}))
+            if (!r.ok) {
+              const msg = j?.error?.message || j?.error?.error_user_msg || JSON.stringify(j?.error || j)
+              return sendJson(400, { error: String(msg), details: j })
+            }
+            return sendJson(200, { ok: true, messageId: j.messages?.[0]?.id })
+          }
+
+          if (req.method === 'POST' && pathNorm === '/api/erp/marketing/whatsapp/send-template') {
+            const auth = await withAuth()
+            if (auth.error) return sendJson(auth.code, { error: auth.error })
+            const denied = requireRole(auth, ['gerente', 'encargado', 'recepcionista'])
+            if (denied) return sendJson(denied.code, { error: denied.error })
+            if (!mEnv.waToken || !mEnv.waPhoneId) {
+              return sendJson(503, {
+                error: 'Falta WHATSAPP_ACCESS_TOKEN o WHATSAPP_PHONE_NUMBER_ID en el servidor.',
+              })
+            }
+            const body = await parseBody()
+            const to = normalizeWhatsAppE164(body.to)
+            const templateName = String(body.templateName || '').trim()
+            const languageCode = (String(body.languageCode || 'es').trim() || 'es').replace(/[^a-zA-Z0-9_]/g, '')
+            const bodyParams = Array.isArray(body.bodyParams) ? body.bodyParams : []
+            if (!to || !templateName) return sendJson(400, { error: 'to y templateName requeridos' })
+            const url = `https://graph.facebook.com/${mEnv.waApiVersion}/${mEnv.waPhoneId}/messages`
+            const templatePayload = {
+              name: templateName,
+              language: { code: languageCode },
+            }
+            if (bodyParams.length) {
+              templatePayload.components = [
+                {
+                  type: 'body',
+                  parameters: bodyParams.map((x) => ({ type: 'text', text: String(x).slice(0, 1024) })),
+                },
+              ]
+            }
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${mEnv.waToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to,
+                type: 'template',
+                template: templatePayload,
+              }),
+            })
+            const j = await r.json().catch(() => ({}))
+            if (!r.ok) {
+              const msg = j?.error?.message || j?.error?.error_user_msg || JSON.stringify(j?.error || j)
+              return sendJson(400, { error: String(msg), details: j })
+            }
+            return sendJson(200, { ok: true, messageId: j.messages?.[0]?.id })
+          }
+
           if (req.method === 'GET' && pathNorm.startsWith('/api/erp/public-booking/options')) {
             const clinicId = +new URL(req.url || '/', 'http://localhost').searchParams.get('clinicId')
             if (!clinicId) return sendJson(400, { error: 'clinicId requerido' })
-            const { data: empsPb } = await admin
-              .from('empleados')
-              .select('id, nombre, rol, especialidad')
-              .eq('clinic_id', clinicId)
-              .eq('activo', true)
-              .order('nombre', { ascending: true })
-            const profesionales = (empsPb || []).filter(
-              (e) =>
-                e.rol === 'especialista' ||
-                (e.rol === 'gerente' && String(e.especialidad || '').trim() !== ''),
-            )
-            const { data: servicios } = await admin
-              .from('servicios')
-              .select('id, nombre, cat')
-              .order('nombre', { ascending: true })
+            // Fetch disponibilidades first — professionals are derived from who has
+            // availability for this clinic, supporting multi-clinic staff.
             const { data: disp } = await admin
               .from('agenda_disponibilidad')
               .select('id, empleado_id, dia_semana, hora_desde, hora_hasta, nota, activo')
@@ -1609,9 +1777,17 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
               .eq('activo', true)
               .order('dia_semana', { ascending: true })
               .order('hora_desde', { ascending: true })
+            const empIds = [...new Set((disp || []).map(d => d.empleado_id))]
+            const { data: empsPb } = empIds.length > 0
+              ? await admin.from('empleados').select('id, nombre, rol, especialidad').in('id', empIds).eq('activo', true).order('nombre', { ascending: true })
+              : { data: [] }
+            const { data: servicios } = await admin
+              .from('servicios')
+              .select('id, nombre, cat')
+              .order('nombre', { ascending: true })
             return sendJson(200, {
               ok: true,
-              profesionales: (profesionales || []).map(p => ({ id: p.id, nombre: p.nombre || 'Especialista' })),
+              profesionales: (empsPb || []).map(p => ({ id: p.id, nombre: p.nombre || 'Especialista' })),
               servicios: (servicios || []).map(s => ({ id: s.id, nombre: s.nombre || '', cat: s.cat || 'clinico' })),
               disponibilidades: (disp || []).map(d => ({
                 id: d.id,
@@ -1719,6 +1895,41 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
             return sendJson(200, { ok: true })
           }
 
+          // Captación de leads desde la web oficial (público, sin login). Anti-spam por honeypot.
+          if (req.method === 'POST' && pathNorm === '/api/erp/lead/create') {
+            const body = await parseBody()
+            // Honeypot: si un bot rellena el campo trampa, fingimos éxito sin guardar.
+            if (String(body.website || body.hp || '').trim() !== '') return sendJson(200, { ok: true })
+            const clinicId = +body.clinicId || 1
+            const name = String(body.name || body.nombre || '').trim().slice(0, 200)
+            const email = String(body.email || '').trim().slice(0, 200)
+            const phone = String(body.phone || body.tel || body.telefono || '').trim().slice(0, 60)
+            const company = String(body.company || body.empresa || '').trim().slice(0, 200)
+            const notes = String(body.notes || body.message || body.mensaje || '').trim().slice(0, 2000)
+            const source = String(body.source || 'web').trim().slice(0, 60) || 'web'
+            if (!name && !email && !phone) {
+              return sendJson(400, { error: 'Indicá al menos nombre, email o teléfono.' })
+            }
+            const { data: clinicOk } = await admin.from('clinics').select('id').eq('id', clinicId).maybeSingle()
+            if (!clinicOk?.id) return sendJson(400, { error: 'Clínica inválida.' })
+            const { data: lead, error: leadErr } = await admin
+              .from('leads_crm')
+              .insert({
+                clinic_id: clinicId,
+                name: name || null,
+                email: email || null,
+                phone: phone || null,
+                company: company || null,
+                status: 'nuevo',
+                source,
+                notes: notes || null,
+              })
+              .select('id')
+              .single()
+            if (leadErr) return sendJson(400, { error: leadErr.message })
+            return sendJson(200, { ok: true, id: lead?.id })
+          }
+
           if (req.method === 'GET' && pathNorm.startsWith('/api/erp/bootstrap')) {
             const auth = await withAuth()
             if (auth.error) return sendJson(auth.code, { error: auth.error })
@@ -1739,7 +1950,7 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
             const { data: pedidoItems } = pedidoIds.length ? await admin.from('pedido_compra_items').select('id, pedido_id, nombre_producto, cantidad_ordenada, costo_unit').in('pedido_id', pedidoIds) : { data: [] }
             const { data: incid } = await admin.from('incidencias_proveedor').select('id, clinic_id, proveedor_id, pedido_id, producto, esperado, recibido, faltante, malo, lote, nota, fotos_urls, estado, created_at').in('clinic_id', clinicIds).order('id')
             const { data: traslados } = await admin.from('traslados_internos').select('id, origen_clinic_id, destino_clinic_id, articulo_id, producto_nombre, cantidad, estado, nota, creado_at, enviado_at, recibido_at').or(`origen_clinic_id.in.(${clinicIds.join(',')}),destino_clinic_id.in.(${clinicIds.join(',')})`).order('id')
-            const { data: srvs } = await admin.from('servicios').select('id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids').order('id')
+            const { data: srvs } = await admin.from('servicios').select('id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids, materiales_cantidades').order('id')
             let consentRows = []
             if (clinicIds.length) {
               try {
@@ -1835,6 +2046,7 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey) {
                 sesiones: +s.sesiones || 1,
                 desc: s.descripcion || '',
                 materialesStockIds: Array.isArray(s.materiales_articulo_ids) ? s.materiales_articulo_ids : [],
+                materialesCantidades: Array.isArray(s.materiales_cantidades) ? s.materiales_cantidades : [],
               })),
               empleados: empleadosFiltrados.map(e => ({
                 id: e.id,
