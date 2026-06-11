@@ -10794,6 +10794,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   /** Asistente por fases: check-in (datos + RGPD) → veredicto → IA → fotos antes → resultado (texto+IA + fotos después) → evaluación → orden (sesion_medica_borrador). */
   const [wizardFase, setWizardFase] = useState("checkin")
   const borradorSesionListoRef = useRef(false)
+  /** true si el borrador restauró servicios — evita que el efecto del servicio por defecto los pise. */
+  const serviciosRestauradosRef = useRef(false)
   const [finalizando, setFinalizando] = useState(false)
   const [askExtrasOpen, setAskExtrasOpen] = useState(false)
   const [allowFinalizeWithoutExtras, setAllowFinalizeWithoutExtras] = useState(false)
@@ -10873,11 +10875,14 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     setTextoResultado("")
     resultadoDictadoRef.current = ""
     borradorSesionListoRef.current = false
+    serviciosRestauradosRef.current = false
   }, [turnoId])
 
   useEffect(() => {
     if (!turno || borradorSesionListoRef.current) return
     const b = turno.sesionMedicaBorrador
+    // El catálogo de servicios puede llegar después del turno: esperá para no perder la selección guardada.
+    if (b && typeof b === "object" && b.v === 1 && Array.isArray(b.serviciosOrdenIds) && b.serviciosOrdenIds.length && !(data.servicios || []).length) return
     if (b && typeof b === "object" && b.v === 1) {
       if (typeof b.docDictadoTexto === "string") {
         setDocDictadoTexto(b.docDictadoTexto)
@@ -10891,9 +10896,10 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       if (Array.isArray(b.tratamientosIA)) setTratamientosIA(b.tratamientosIA)
       if (Array.isArray(b.serviciosOrdenIds) && b.serviciosOrdenIds.length) {
         const ids = b.serviciosOrdenIds.map(id => +id).filter(id => (data.servicios || []).some(s => s.id === id))
-        if (ids.length) setServiciosOrdenIds(ids)
+        if (ids.length) { setServiciosOrdenIds(ids); serviciosRestauradosRef.current = true }
       } else if (b.servicioSel != null && (data.servicios || []).some(s => s.id === +b.servicioSel)) {
         setServiciosOrdenIds([+b.servicioSel])
+        serviciosRestauradosRef.current = true
       }
       if (b.qty && typeof b.qty === "object") setQty(b.qty)
       if (b.qtyReal && typeof b.qtyReal === "object") setQtyReal(b.qtyReal)
@@ -11073,7 +11079,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   }
 
   useEffect(() => {
-    if (!turno) return
+    if (!turno || serviciosRestauradosRef.current) return
     const d = defaultServicioId(turno)
     setServiciosOrdenIds(d != null ? [d] : [])
   }, [turno?.id])
@@ -11087,31 +11093,35 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     const desde = narrow ? "movil" : "qr_escritorio"
     if (import.meta.env.VITE_SUPABASE_URL) {
       ;(async () => {
-        const { error } = await supabase.from("turnos").update({
-          estado: "en_curso",
-          sesion_iniciada_desde: desde,
-        }).eq("id", turnoId)
-        if (error) {
-          console.error("No se pudo persistir en_curso:", error.message)
-          return
-        }
-        const { data: { session: sb } } = await supabase.auth.getSession()
-        const token = sb?.access_token
-        if (!token) return
-        const r = await fetch("/api/erp/turno/marcar-paciente-area-medica", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ turnoId }),
-        })
-        if (r.ok) onConsentSaved?.()
-        else {
-          const j = await r.json().catch(() => null)
-          console.warn("marcar-paciente-area-medica:", j?.error || r.status)
-        }
-        if (Object.keys(qtyBase).length) {
-          const stockList = data.clinics[clinicId]?.stock || []
-          const resStock = await persistirDeltaStockEnSupabase({ clinic: clinicId, stockList, deltaMap: qtyBase })
-          if (!resStock.ok) console.warn("No se pudo descontar stock base en BD:", resStock.error)
+        try {
+          const { error } = await supabase.from("turnos").update({
+            estado: "en_curso",
+            sesion_iniciada_desde: desde,
+          }).eq("id", turnoId)
+          if (error) {
+            console.error("No se pudo persistir en_curso:", error.message)
+            return
+          }
+          const { data: { session: sb } } = await supabase.auth.getSession()
+          const token = sb?.access_token
+          if (!token) return
+          const r = await fetch("/api/erp/turno/marcar-paciente-area-medica", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ turnoId }),
+          })
+          if (r.ok) onConsentSaved?.()
+          else {
+            const j = await r.json().catch(() => null)
+            console.warn("marcar-paciente-area-medica:", j?.error || r.status)
+          }
+          if (Object.keys(qtyBase).length) {
+            const stockList = data.clinics[clinicId]?.stock || []
+            const resStock = await persistirDeltaStockEnSupabase({ clinic: clinicId, stockList, deltaMap: qtyBase })
+            if (!resStock.ok) console.warn("No se pudo descontar stock base en BD:", resStock.error)
+          }
+        } catch (e) {
+          console.error("inicio de sesión médica (en_curso):", e)
         }
       })()
     }
@@ -11286,8 +11296,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       setTreatmentPreviewError("Escribí el protocolo o la evaluación del tratamiento primero.")
       return
     }
-    const catTurno = data?.turnos?.find(t => String(t.id) === String(turnoId))?.cat
-    const zona = catTurno === "corporal" ? "corporal" : "facial"
+    const zona = turno?.cat === "corporal" ? "corporal" : "facial"
     const b64 = dataUrlToBase64(facePreview)
     const mime = String(facePreview).startsWith("data:image/png") ? "image/png" : "image/jpeg"
     setTreatmentPreviewLoading(true)
@@ -11430,6 +11439,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
               : name === "NotReadableError" || name === "TrackStartError"
                 ? "La cámara está en uso por otra aplicación."
                 : "No se pudo abrir la cámara. Podés usar «Elegir foto del rostro»."
+      // Apagá la cámara si quedó un stream a medio abrir (p. ej. video.play() falló en iOS).
+      try { streamRef.current?.getTracks?.().forEach(t => t.stop()) } catch { /* noop */ }
+      streamRef.current = null
       setFaceError(msg + hint)
     }
   }
@@ -12951,6 +12963,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       }
       onExit()
       if (onPersist) await onPersist()
+    } catch (e) {
+      console.error("finalizar sesión médica:", e)
+      setMedSessionModal({ open: true, title: "No se pudo finalizar", body: String(e?.message || e) + " — Revisá la conexión e intentá de nuevo. El avance quedó guardado." })
     } finally {
       setAllowFinalizeWithoutExtras(false)
       setFinalizando(false)
@@ -13006,7 +13021,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       alert("Indicá el servicio o producto que se aplicará.")
       return
     }
-    if (sigPacienteRef.current?.isEmpty?.()) {
+    if (!sigPacienteRef.current || sigPacienteRef.current.isEmpty()) {
       alert("La paciente debe firmar en el recuadro (con el dedo o el mouse).")
       return
     }
@@ -13131,7 +13146,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       alert("Indicá el nombre completo del paciente.")
       return
     }
-    if (!rgpdFirmado && sigRgpdRef.current?.isEmpty?.()) {
+    if (!rgpdFirmado && (!sigRgpdRef.current || sigRgpdRef.current.isEmpty())) {
       alert("El paciente debe firmar el consentimiento de protección de datos (RGPD).")
       return
     }
@@ -13162,7 +13177,8 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       if (!rgpdFirmado && import.meta.env.VITE_SUPABASE_URL) {
         const pl = plantillasConsentArea.find(p => p.slug === RGPD_SLUG)
         if (!pl) {
-          alert("No se encontró la plantilla de protección de datos (RGPD).")
+          alert("No se encontró la plantilla de protección de datos (RGPD). Continuá con la atención y registrá el consentimiento en papel o desde la fase de orden.")
+          setWizardFase("veredicto")
           return
         }
         const fechaStr = new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" })
@@ -13249,6 +13265,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
         sigRgpdRef.current?.clear?.()
       }
       setWizardFase("veredicto")
+    } catch (e) {
+      console.error("check-in paciente:", e)
+      alert(`No se pudo completar el check-in: ${String(e?.message || e)}. Revisá la conexión e intentá de nuevo.`)
     } finally {
       setSavingCheckin(false)
     }
@@ -13501,7 +13520,11 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
   ]
   const stepIndex = wizardDefs.findIndex(s => s.id === wizardFase)
   const goPrevStep = () => setWizardFase(wizardDefs[Math.max(0, stepIndex - 1)]?.id || "veredicto")
-  const goNextStep = () => setWizardFase(wizardDefs[Math.min(wizardDefs.length - 1, stepIndex + 1)]?.id || "orden")
+  const goNextStep = () => {
+    // El check-in valida y guarda (datos + firma RGPD); no se puede saltar con "Sig.".
+    if (wizardFase === "checkin") { void completarCheckin(); return }
+    setWizardFase(wizardDefs[Math.min(wizardDefs.length - 1, stepIndex + 1)]?.id || "orden")
+  }
 
   const medCard = {
     background: "linear-gradient(135deg, rgba(255,255,255,0.82) 0%, rgba(255,255,255,0.68) 100%)",
