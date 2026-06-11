@@ -2591,6 +2591,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   const MONTHS_LONG = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
   const weekLabel = useMemo(() => {
     const MO = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]
+    if (calView === "anual") return String(new Date().getFullYear() + monthOffset)
     if (calView === "mes") return `${MONTHS_LONG[monthDate.getMonth()]} ${monthDate.getFullYear()}`
     const first = viewDays[0]
     const last = viewDays[viewDays.length - 1]
@@ -2598,7 +2599,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     const sm = first.getMonth() === last.getMonth()
     if (sm) return `${first.getDate()}–${last.getDate()} ${MO[first.getMonth()]} ${first.getFullYear()}`
     return `${first.getDate()} ${MO[first.getMonth()]} – ${last.getDate()} ${MO[last.getMonth()]} ${last.getFullYear()}`
-  }, [viewDays, calView, monthDate])
+  }, [viewDays, calView, monthDate, monthOffset])
 
   const catColor  = { valoracion:"#FFFBEB", facial:"#EFF6FF", corporal:"#F0FDFA", laser:"#EEF2FF", botox:"#FDF4FF", clinico:"#ECFDF5" }
   const catBorder = { valoracion:"#F59E0B", facial:"#3B82F6", corporal:"#14B8A6", laser:"#6366F1", botox:"#A855F7", clinico:"#10B981" }
@@ -2682,10 +2683,10 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:10 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <button
-            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()-1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") setMonthOffset(m=>m-1) else setWeekOffset(w=>w-1) }}
+            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()-1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") { setMonthOffset(prev=>prev-1) } else { setWeekOffset(w=>w-1) } }}
             style={{ border:`1px solid ${C.border}`, background:"#fff", borderRadius:8, width:32, height:32, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", color:C.text }}>‹</button>
           <button
-            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()+1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") setMonthOffset(m=>m+1) else setWeekOffset(w=>w+1) }}
+            onClick={() => { if (calView==="dia") { const dt=new Date(selectedDay+"T12:00:00"); dt.setDate(dt.getDate()+1); setSelectedDay(dt.toISOString().slice(0,10)) } else if (calView==="mes") { setMonthOffset(prev=>prev+1) } else { setWeekOffset(w=>w+1) } }}
             style={{ border:`1px solid ${C.border}`, background:"#fff", borderRadius:8, width:32, height:32, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", color:C.text }}>›</button>
           <button
             onClick={() => { setWeekOffset(0); setMonthOffset(0); setSelectedDay(TODAY) }}
@@ -2694,9 +2695,9 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <div style={{ display:"flex", border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden" }}>
-            {[{id:"mes",label:"Mes"},{id:"semana",label:"Semana"},{id:"dia",label:"Día"},{id:"lista",label:"Lista"}].map(v => (
+            {[{id:"dia",label:"Diario"},{id:"semana",label:"Semanal"},{id:"mes",label:"Mensual"},{id:"anual",label:"Anual"},{id:"lista",label:"Lista"}].map(v => (
               <button key={v.id} onClick={() => setCalView(v.id)}
-                style={{ padding:"0 12px", height:32, fontSize:12, fontWeight:700, border:"none", cursor:"pointer", transition:"all .15s", background:calView===v.id?C.violet:"#fff", color:calView===v.id?"#fff":C.muted }}>
+                style={{ padding:"0 11px", height:32, fontSize:11, fontWeight:700, border:"none", cursor:"pointer", transition:"all .15s", background:calView===v.id?C.violet:"#fff", color:calView===v.id?"#fff":C.muted }}>
                 {v.label}
               </button>
             ))}
@@ -2712,37 +2713,79 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
 
       {/* ── DISPONIBILIDAD (colapsable) ──────────────────────── */}
       {showDisp && (
-        <div style={{ marginBottom:14, padding:14, background:C.card, borderRadius:12, border:`1px solid ${C.border}` }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <div style={{ marginBottom:14, background:C.card, borderRadius:12, border:`1px solid ${C.border}`, overflow:"hidden" }}>
+          {/* Header */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:`1px solid ${C.border}` }}>
             <div style={{ fontSize:13, fontWeight:700 }}>Disponibilidad del personal — {nombreClinica(clinic)}</div>
-            <div style={{ fontSize:12, color:C.muted }}>{dispRows.length} franja(s)</div>
+            <div style={{ fontSize:12, color:C.muted }}>{dispRows.length} franja{dispRows.length!==1?"s":""} · {profsForClinic.length} especialista{profsForClinic.length!==1?"s":""}</div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:compact?"1fr":"repeat(6,minmax(0,1fr))", gap:8, marginBottom:10 }}>
-            <select style={inp} value={dispForm.empleadoId} onChange={e=>setDispForm(f=>({...f,empleadoId:e.target.value}))} disabled={!canEditDisponibilidad}>
-              <option value="">Profesional…</option>
-              {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
-            <select style={inp} value={dispForm.diaSemana} onChange={e=>setDispForm(f=>({...f,diaSemana:+e.target.value}))} disabled={!canEditDisponibilidad}>
-              {[1,2,3,4,5,6,0].map(d=><option key={d} value={d}>{DIA_SEMANA[d]}</option>)}
-            </select>
-            <input type="time" style={inp} value={dispForm.horaDesde} onChange={e=>setDispForm(f=>({...f,horaDesde:e.target.value}))} disabled={!canEditDisponibilidad}/>
-            <input type="time" style={inp} value={dispForm.horaHasta} onChange={e=>setDispForm(f=>({...f,horaHasta:e.target.value}))} disabled={!canEditDisponibilidad}/>
-            <input style={{...inp,gridColumn:compact?"auto":"span 2"}} placeholder="Nota (opcional)" value={dispForm.nota} onChange={e=>setDispForm(f=>({...f,nota:e.target.value}))} disabled={!canEditDisponibilidad}/>
-          </div>
-          {canEditDisponibilidad && <Btn sm onClick={()=>void saveDisponibilidad()} disabled={savingDisp}>{savingDisp?"Guardando...":"Agregar franja"}</Btn>}
-          <div style={{ marginTop:10, maxHeight:160, overflowY:"auto" }}>
-            {dispRows.length===0
-              ? <div style={{ fontSize:12, color:C.muted }}>Sin disponibilidades cargadas.</div>
-              : dispRows.map(r=>(
-                <div key={r.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, borderBottom:`1px solid ${C.subtle}`, padding:"7px 0" }}>
-                  <div style={{ fontSize:12 }}>
-                    <strong>{profsForClinic.find(p=>+p.id===+r.empleadoId)?.nombre||`Prof. ${r.empleadoId}`}</strong>
-                    {" · "}{DIA_SEMANA[r.diaSemana]||r.diaSemana} · {r.horaDesde}–{r.horaHasta}{r.nota?` · ${r.nota}`:""}
+
+          {/* Grid visual por especialista */}
+          {profsForClinic.length > 0 && (
+            <div style={{ overflowX:"auto", padding:"14px 16px" }}>
+              {/* Cabecera días */}
+              <div style={{ display:"grid", gridTemplateColumns:"140px repeat(7,1fr)", gap:4, marginBottom:6 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.muted }}>Especialista</div>
+                {["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map((d,i)=>(
+                  <div key={i} style={{ fontSize:11, fontWeight:700, color:C.muted, textAlign:"center" }}>{d}</div>
+                ))}
+              </div>
+              {/* Fila por profesional */}
+              {profsForClinic.map(p => {
+                const profRows = dispRows.filter(r => +r.empleadoId === +p.id)
+                const totalFranjas = profRows.length
+                const profColor = profs.find(pr=>+pr.id===+p.id)?.color || C.violet
+                return (
+                  <div key={p.id} style={{ display:"grid", gridTemplateColumns:"140px repeat(7,1fr)", gap:4, marginBottom:4, alignItems:"center" }}>
+                    {/* Nombre + conteo */}
+                    <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                      <div style={{ width:8, height:8, borderRadius:"50%", background:profColor || C.violet, flexShrink:0 }}/>
+                      <div style={{ fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.nombre}</div>
+                      <div style={{ fontSize:10, color:C.muted, flexShrink:0 }}>({totalFranjas})</div>
+                    </div>
+                    {/* Celdas Lun-Dom (dias 1-7, domingo=0) */}
+                    {[1,2,3,4,5,6,0].map(dia => {
+                      const franjas = profRows.filter(r => r.diaSemana === dia)
+                      return (
+                        <div key={dia} style={{ minHeight:38, borderRadius:6, border:`1px solid ${C.border}`, background: franjas.length>0 ? `${C.violet}15` : C.subtle, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2, padding:"3px 4px" }}>
+                          {franjas.length===0
+                            ? <div style={{ fontSize:9, color:C.muted }}>—</div>
+                            : franjas.map(f=>(
+                              <div key={f.id} style={{ fontSize:9, fontWeight:600, color:C.violet, lineHeight:1.3, textAlign:"center", cursor: canEditDisponibilidad?"pointer":undefined }}
+                                title={canEditDisponibilidad?"Click para eliminar":""}
+                                onClick={canEditDisponibilidad ? ()=>void delDisponibilidad(f.id) : undefined}>
+                                {String(f.horaDesde||"").slice(0,5)}–{String(f.horaHasta||"").slice(0,5)}
+                              </div>
+                            ))
+                          }
+                        </div>
+                      )
+                    })}
                   </div>
-                  {canEditDisponibilidad && <Btn variant="danger" sm onClick={()=>void delDisponibilidad(r.id)}><Trash2 size={11}/></Btn>}
-                </div>
-              ))}
-          </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Formulario agregar */}
+          {canEditDisponibilidad && (
+            <div style={{ padding:"12px 16px", borderTop:`1px solid ${C.border}`, background:C.subtle }}>
+              <div style={{ fontSize:12, fontWeight:700, marginBottom:8, color:C.text }}>+ Agregar franja de disponibilidad</div>
+              <div style={{ display:"grid", gridTemplateColumns:compact?"1fr 1fr":"repeat(5,1fr) auto", gap:8, alignItems:"end" }}>
+                <select style={inp} value={dispForm.empleadoId} onChange={e=>setDispForm(f=>({...f,empleadoId:e.target.value}))}>
+                  <option value="">Profesional…</option>
+                  {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                </select>
+                <select style={inp} value={dispForm.diaSemana} onChange={e=>setDispForm(f=>({...f,diaSemana:+e.target.value}))}>
+                  {[1,2,3,4,5,6,0].map(d=><option key={d} value={d}>{DIA_SEMANA[d]}</option>)}
+                </select>
+                <input type="time" style={inp} value={dispForm.horaDesde} onChange={e=>setDispForm(f=>({...f,horaDesde:e.target.value}))}/>
+                <input type="time" style={inp} value={dispForm.horaHasta} onChange={e=>setDispForm(f=>({...f,horaHasta:e.target.value}))}/>
+                <input style={inp} placeholder="Nota (opcional)" value={dispForm.nota} onChange={e=>setDispForm(f=>({...f,nota:e.target.value}))}/>
+                <Btn sm onClick={()=>void saveDisponibilidad()} disabled={savingDisp} style={{ whiteSpace:"nowrap" }}>{savingDisp?"Guardando…":"Agregar"}</Btn>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2781,6 +2824,58 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
               </div>}
         </div>
       )}
+
+      {/* ── VISTA ANUAL ─────────────────────────────────────── */}
+      {calView==="anual" && (() => {
+        const year = (new Date().getFullYear()) + monthOffset
+        const turnosByDate = {}
+        for (const t of turnos) { if (!turnosByDate[t.fecha]) turnosByDate[t.fecha]=[]; turnosByDate[t.fecha].push(t) }
+        return (
+          <div style={{ background:C.card, borderRadius:16, padding:20, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
+              <div style={{ fontSize:17, fontWeight:800 }}>{year}</div>
+              <div style={{ fontSize:12, color:C.muted }}>{turnos.filter(t=>t.fecha.startsWith(String(year))).length} citas en el año</div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+              {Array.from({length:12},(_,mi)=>{
+                const firstDay = new Date(year, mi, 1)
+                const startOffset = (firstDay.getDay()+6)%7
+                const daysInMonth = new Date(year, mi+1, 0).getDate()
+                const cells = Array.from({length: startOffset + daysInMonth}, (_,i) => i < startOffset ? null : i - startOffset + 1)
+                while (cells.length % 7 !== 0) cells.push(null)
+                return (
+                  <div key={mi} style={{ border:`1px solid ${C.border}`, borderRadius:10, overflow:"hidden" }}>
+                    <div style={{ padding:"8px 10px", fontSize:12, fontWeight:700, background:C.violetLight, color:C.violet }}>{MONTHS_LONG[mi]}</div>
+                    <div style={{ padding:"6px 8px" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2, marginBottom:4 }}>
+                        {["L","M","X","J","V","S","D"].map(d=><div key={d} style={{ textAlign:"center", fontSize:9, fontWeight:700, color:C.muted }}>{d}</div>)}
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:2 }}>
+                        {cells.map((day,ci) => {
+                          if (!day) return <div key={ci}/>
+                          const dateStr = `${year}-${String(mi+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`
+                          const cnt = (turnosByDate[dateStr]||[]).length
+                          const isToday = dateStr === TODAY
+                          return (
+                            <div key={ci}
+                              onClick={()=>{ setSelectedDay(dateStr); setCalView("dia") }}
+                              style={{ textAlign:"center", cursor:"pointer", borderRadius:4, padding:"2px 0", background: isToday ? C.violet : cnt>0 ? `${C.violet}18` : "transparent", transition:"background .1s" }}
+                              title={cnt>0 ? `${cnt} cita${cnt!==1?"s":""}` : ""}
+                            >
+                              <div style={{ fontSize:10, fontWeight: isToday?800:cnt>0?600:400, color: isToday?"#fff":cnt>0?C.violet:C.text }}>{day}</div>
+                              {cnt>0 && !isToday && <div style={{ width:4, height:4, borderRadius:"50%", background:C.violet, margin:"1px auto 0" }}/>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── VISTA MES ───────────────────────────────────────── */}
       {calView==="mes" && (
