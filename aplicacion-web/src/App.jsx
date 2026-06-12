@@ -11581,11 +11581,12 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     serviciosRestauradosRef.current = false
   }, [turnoId])
 
-  /** Borrador leído directo de BD cuando el estado local no lo trae (el bootstrap del backend lo omite). */
+  /** Borrador leído SIEMPRE directo de BD al montar: el turno del estado puede traer
+   *  un borrador viejo (bootstrap/Realtime stale) y, si se usara, el autosave posterior
+   *  pisaría en BD el avance real de la sesión. */
   const [borradorDb, setBorradorDb] = useState(undefined) // undefined = aún no consultado, null = no hay
   useEffect(() => {
     if (!turnoId || borradorSesionListoRef.current) return
-    if (turno?.sesionMedicaBorrador) { setBorradorDb(null); return }
     if (!import.meta.env.VITE_SUPABASE_URL) { setBorradorDb(null); return }
     let cancelled = false
     ;(async () => {
@@ -11597,13 +11598,13 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       }
     })()
     return () => { cancelled = true }
-  }, [turnoId, turno?.sesionMedicaBorrador])
+  }, [turnoId])
 
   useEffect(() => {
     if (!turno || borradorSesionListoRef.current) return
-    const b = turno.sesionMedicaBorrador || borradorDb
-    // Si el estado local no trae borrador, esperá la consulta directa a BD antes de marcar listo.
-    if (!turno.sesionMedicaBorrador && borradorDb === undefined) return
+    // Esperar SIEMPRE la lectura directa de BD; es la fuente de verdad del borrador.
+    if (borradorDb === undefined) return
+    const b = borradorDb || turno.sesionMedicaBorrador
     // El catálogo de servicios puede llegar después del turno: esperá para no perder la selección guardada.
     if (b && typeof b === "object" && b.v === 1 && Array.isArray(b.serviciosOrdenIds) && b.serviciosOrdenIds.length && !(data.servicios || []).length) return
     if (b && typeof b === "object" && b.v === 1) {
@@ -13472,7 +13473,9 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     if (!import.meta.env.VITE_SUPABASE_URL || !turnoId || !borradorSesionListoRef.current) return
     const t = setTimeout(() => {
       const payload = buildSesionMedicaBorradorPayload()
-      void supabase.from("turnos").update({ sesion_medica_borrador: payload }).eq("id", turnoId)
+      // OJO: el builder de supabase-js es lazy — sin .then()/await la petición NUNCA se envía.
+      supabase.from("turnos").update({ sesion_medica_borrador: payload }).eq("id", turnoId)
+        .then(({ error }) => { if (error) console.warn("[wizard] borrador no guardado:", error.message) })
       setData(d => {
         const clinic = d.clinics[clinicId]
         if (!clinic?.turnos) return d
@@ -16473,7 +16476,9 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           draft: { servicioSel, protocolo, notas, qty, salaTrabajo: salaTrabajoActiva, updatedAt: new Date().toISOString() },
         },
       }
-      void supabase.from("turnos").update({ sesion_medica_borrador: payload }).eq("id", activo.id)
+      // El builder de supabase-js es lazy: sin .then() la petición no se envía.
+      supabase.from("turnos").update({ sesion_medica_borrador: payload }).eq("id", activo.id)
+        .then(({ error }) => { if (error) console.warn("[sala] borrador no guardado:", error.message) })
     }, 1200)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
