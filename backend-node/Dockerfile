@@ -2,6 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# git es necesario: baileys instala dependencias desde repos git (libsignal).
+RUN apk add --no-cache git
+
 # Cache de dependencias.
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
