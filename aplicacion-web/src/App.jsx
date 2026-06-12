@@ -16446,7 +16446,7 @@ function DoctorAreaLanding({ clinic, onOpenDemo, demoTurno }) {
 }
 
 // ─── ORDEN DE SERVICIO — SALA (especialista) ──────────────────
-function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltro, onPersist }) {
+function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltro, onPersist, onAbrirAreaMedica }) {
   const [activo, setActivo] = useState(null)
   const [servicioSel, setServicioSel] = useState(null)
   const [protocolo, setProtocolo] = useState("")
@@ -16912,9 +16912,21 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
                     <Pildora icon={Stethoscope}>{prof?.nombre || "Sin especialista"}</Pildora>
                     {getSalaTrabajoTurno(t) && <Pildora tono="verde">{getSalaTrabajoTurno(t)}</Pildora>}
                   </div>
-                  <Btn onClick={() => void iniciar(t)} disabled={iniciandoId === t.id} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
-                    {iniciandoId === t.id ? <><Loader2 size={14} className="erp-spin"/> Iniciando…</> : <><MonitorPlay size={14}/> Iniciar atención</>}
-                  </Btn>
+                  {onAbrirAreaMedica ? (
+                    <>
+                      <Btn onClick={() => onAbrirAreaMedica(t)} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
+                        <Stethoscope size={14}/> Iniciar atención (área médica)
+                      </Btn>
+                      <button type="button" onClick={() => void iniciar(t)} disabled={iniciandoId === t.id}
+                        style={{ border: "none", background: "none", color: C.muted, fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: "2px 0", textDecoration: "underline", textUnderlineOffset: 3 }}>
+                        {iniciandoId === t.id ? "Iniciando…" : "Orden rápida sin ficha clínica"}
+                      </button>
+                    </>
+                  ) : (
+                    <Btn onClick={() => void iniciar(t)} disabled={iniciandoId === t.id} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
+                      {iniciandoId === t.id ? <><Loader2 size={14} className="erp-spin"/> Iniciando…</> : <><MonitorPlay size={14}/> Iniciar atención</>}
+                    </Btn>
+                  )}
                 </div>
               )
             })}
@@ -16971,9 +16983,16 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
                       <Activity size={13}/> Orden de servicio abierta
                     </div>
                   ) : (
-                    <Btn variant="outline" onClick={() => abrirOrden(t)} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
-                      <ClipboardCheck size={14}/> {tieneDraft ? "Continuar orden (borrador guardado)" : "Completar orden de servicio"}
-                    </Btn>
+                    <>
+                      {onAbrirAreaMedica && (
+                        <Btn onClick={() => onAbrirAreaMedica(t)} style={{ width: "100%", justifyContent: "center", minHeight: 42 }}>
+                          <Stethoscope size={14}/> Continuar en área médica
+                        </Btn>
+                      )}
+                      <Btn variant="outline" onClick={() => abrirOrden(t)} style={{ width: "100%", justifyContent: "center", minHeight: onAbrirAreaMedica ? 36 : 42 }}>
+                        <ClipboardCheck size={14}/> {tieneDraft ? "Continuar orden (borrador guardado)" : "Orden rápida (solo facturación)"}
+                      </Btn>
+                    </>
                   )}
                 </div>
               )
@@ -18711,7 +18730,7 @@ export default function App() {
         {/* PAGE CONTENT */}
         <main style={{ flex:1, overflowY:"auto", WebkitOverflowScrolling:"touch", padding:"max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))" }}>
           {section==="dashboard"     && <Dashboard     data={data} clinic={clinic} setData={setData} role={role} onOpenTurnoSession={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })} onPersist={refreshErpData} onGoAgenda={() => goToSection("agenda")} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre}/>}
-          {section==="sala"          && <SalaOrdenServicio data={data} setData={setData} clinic={clinic} nombreProfesional={session.nombre} profFiltro={normalizeRol(role) === "especialista" ? 1 : null} onPersist={refreshErpData} />}
+          {section==="sala"          && <SalaOrdenServicio data={data} setData={setData} clinic={clinic} nombreProfesional={session.nombre} profFiltro={normalizeRol(role) === "especialista" ? 1 : null} onPersist={refreshErpData} onAbrirAreaMedica={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })} />}
           {section==="doctor_area"   && <DoctorAreaLanding clinic={clinic} demoTurno={pickDemoTurnoForDoctorArea(data.clinics[clinic]?.turnos)} onOpenDemo={t => setManualDoctorCtx({ clinicId: clinic, turnoId: t.id })} />}
           {section==="pacientes"     && <PacientesHistorial data={data} setData={setData} role={role} nombreUsuario={session.nombre} mode="pacientes" clinic={clinic} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre} onConsentSaved={refreshErpData} sessionEmail={session?.user}/>}
           {section==="clientes"      && <PacientesHistorial data={data} setData={setData} role={role} nombreUsuario={session.nombre} mode="clientes" clinic={clinic} clinicNombre={clinicOptions.find(c => c.id === clinic)?.nombre} onConsentSaved={refreshErpData} sessionEmail={session?.user}/>}
