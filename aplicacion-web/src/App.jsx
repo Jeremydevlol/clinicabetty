@@ -10630,7 +10630,7 @@ function MarketingHub({ data, setData, clinic }) {
   return (
     <div>
       <h2 style={{ fontSize:20, fontWeight:700, marginBottom:8 }}>Marketing automatizado</h2>
-      <p style={{ fontSize:13, color:C.muted, marginBottom:18 }}>WhatsApp con Baileys: conectá el QR en «Campañas, chats y agente». Instagram: API Meta (variables en .env del backend).</p>
+      <p style={{ fontSize:13, color:C.muted, marginBottom:18 }}>WhatsApp: escaneá el QR en «Campañas, chats y agente» para conectar el número de la clínica. Instagram se conecta con la cuenta de Meta del negocio.</p>
       <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch", paddingBottom:2 }}>
         <div style={{ minWidth: compact ? 480 : undefined }}>
           <TabBar tabs={[{ id:"wa", label:"WhatsApp turnos" }, { id:"cumple", label:"Cumpleaños" }, { id:"react", label:"Reactivación" }, { id:"ig", label:"Instagram" }]} active={sub} onChange={setSub}/>
@@ -11555,9 +11555,29 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     serviciosRestauradosRef.current = false
   }, [turnoId])
 
+  /** Borrador leído directo de BD cuando el estado local no lo trae (el bootstrap del backend lo omite). */
+  const [borradorDb, setBorradorDb] = useState(undefined) // undefined = aún no consultado, null = no hay
+  useEffect(() => {
+    if (!turnoId || borradorSesionListoRef.current) return
+    if (turno?.sesionMedicaBorrador) { setBorradorDb(null); return }
+    if (!import.meta.env.VITE_SUPABASE_URL) { setBorradorDb(null); return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data: row } = await supabase.from("turnos").select("sesion_medica_borrador").eq("id", turnoId).single()
+        if (!cancelled) setBorradorDb(row?.sesion_medica_borrador || null)
+      } catch {
+        if (!cancelled) setBorradorDb(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [turnoId, turno?.sesionMedicaBorrador])
+
   useEffect(() => {
     if (!turno || borradorSesionListoRef.current) return
-    const b = turno.sesionMedicaBorrador
+    const b = turno.sesionMedicaBorrador || borradorDb
+    // Si el estado local no trae borrador, esperá la consulta directa a BD antes de marcar listo.
+    if (!turno.sesionMedicaBorrador && borradorDb === undefined) return
     // El catálogo de servicios puede llegar después del turno: esperá para no perder la selección guardada.
     if (b && typeof b === "object" && b.v === 1 && Array.isArray(b.serviciosOrdenIds) && b.serviciosOrdenIds.length && !(data.servicios || []).length) return
     if (b && typeof b === "object" && b.v === 1) {
@@ -11600,7 +11620,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       if (typeof b.wizardFase === "string" && validF.includes(b.wizardFase)) setWizardFase(b.wizardFase)
     }
     borradorSesionListoRef.current = true
-  }, [turno, turnoId, data.servicios])
+  }, [turno, turnoId, data.servicios, borradorDb])
 
   useEffect(() => {
     if (!usarTripleSesionMedica) return
@@ -16433,9 +16453,17 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activo?.id, servicioSel, protocolo, notas, qty, salaTrabajoActiva])
 
-  /** Abre el modal de orden restaurando el borrador guardado si existe. */
-  const abrirOrden = t => {
-    const draft = t.sesionMedicaBorrador?.sala?.draft
+  /** Abre el modal de orden restaurando el borrador guardado si existe.
+   *  Lee el borrador directo de BD: el estado local puede haberlo perdido
+   *  (el bootstrap del backend no incluye sesion_medica_borrador). */
+  const abrirOrden = async t => {
+    let draft = t.sesionMedicaBorrador?.sala?.draft
+    if (!draft && import.meta.env.VITE_SUPABASE_URL) {
+      try {
+        const { data: row } = await supabase.from("turnos").select("sesion_medica_borrador").eq("id", t.id).single()
+        draft = row?.sesion_medica_borrador?.sala?.draft || null
+      } catch { /* sin red: abrir con valores por defecto */ }
+    }
     setActivo(t)
     setSalaTrabajoActiva(draft?.salaTrabajo || getSalaTrabajoTurno(t) || "Sala 1")
     setServicioSel(draft?.servicioSel ?? defaultServicioId(t))
@@ -16563,10 +16591,14 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
         }
         const turnoActualDb = data.clinics[clinic].turnos.find(t => t.id === turno.id) || turno
         // ref (sobrevive Realtime) → estado local → borrador JSONB en BD (sobrevive recarga de página) → {}
-        const qtyBaseDb = consumoBaseMapRef.current[turno.id]
+        let qtyBaseDb = consumoBaseMapRef.current[turno.id]
           || turnoActualDb?.consumoBaseStock
           || turnoActualDb?.sesionMedicaBorrador?.sala?.consumoBaseStock
-          || {}
+        if (!qtyBaseDb) {
+          // El bootstrap del backend no trae sesion_medica_borrador: leerlo directo de BD
+          const { data: row } = await supabase.from("turnos").select("sesion_medica_borrador").eq("id", turno.id).single()
+          qtyBaseDb = row?.sesion_medica_borrador?.sala?.consumoBaseStock || {}
+        }
         const qtyTotalDb = mergeQtyMaps(qtyBaseDb, qty)
         const detalleInsumos = Object.entries(qtyTotalDb).map(([k, v]) => {
           const s = (data.clinics[clinic]?.stock || []).find(x => x.id === +k)
