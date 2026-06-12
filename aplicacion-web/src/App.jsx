@@ -3719,9 +3719,35 @@ function Stock({ data, clinic, setData, onPersist, role }) {
     if (!items.length) return
     if (import.meta.env.VITE_SUPABASE_URL) {
       try {
+        // Si el proveedor elegido es uno "derivado" del texto de los artículos
+        // (no existe en la tabla proveedores), crearlo primero para no romper la FK.
+        let proveedorIdReal = +pedidoForm.proveedorId
+        const existeReal = proveedoresRaw.some(p => +p.id === proveedorIdReal)
+        if (!existeReal) {
+          const provVisual = proveedores.find(p => +p.id === proveedorIdReal)
+          const nombreProv = provVisual?.nombre || "Proveedor"
+          const norm = s => String(s || "").trim().toLowerCase()
+          // RLS bloquea leer/insertar proveedores desde el cliente: todo vía backend.
+          const buscarEnBootstrap = async () => {
+            const { data: { session: sb } } = await supabase.auth.getSession()
+            const r = await fetch("/api/erp/bootstrap", { headers: { Authorization: `Bearer ${sb?.access_token}` } })
+            const j = r.ok ? await r.json().catch(() => null) : null
+            return (j?.proveedores || [])
+              .filter(p => norm(p.nombre) === norm(nombreProv))
+              .sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null
+          }
+          let provReal = await buscarEnBootstrap()
+          if (!provReal) {
+            await apiPost("/api/erp/provider/create", { nombre: nombreProv, contacto: "", tel: "", email: "", productos: [] })
+            provReal = await buscarEnBootstrap()
+          }
+          if (!provReal?.id) throw new Error("No se pudo crear/recuperar el proveedor en el sistema.")
+          proveedorIdReal = +provReal.id
+          setData(d => ({ ...d, proveedores: (d.proveedores || []).some(p => +p.id === +provReal.id) ? d.proveedores : [...(d.proveedores || []), { id: +provReal.id, nombre: nombreProv, contacto: "", tel: "", email: "", productos: [] }] }))
+        }
         await apiPost("/api/erp/pedido/create", {
           clinicId: clinic,
-          proveedorId: +pedidoForm.proveedorId,
+          proveedorId: proveedorIdReal,
           fecha: pedidoForm.fecha || TODAY,
           notas: pedidoForm.notas || "",
           items,
@@ -16618,7 +16644,7 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
           .update(alertaPayload).eq("turno_id", turno.id).select("id")
         if (!updAlerta || updAlerta.length === 0) {
           // El trigger no creó la fila todavía — insertar manualmente
-          await supabase.from("alertas_cobro").upsert({
+          const { error: eAlerta } = await supabase.from("alertas_cobro").upsert({
             clinic_id: turno.clinicId ?? clinic,
             turno_id: turno.id,
             cliente: turno.cliente || "",
@@ -16627,6 +16653,9 @@ function SalaOrdenServicio({ data, setData, clinic, nombreProfesional, profFiltr
             ...alertaPayload,
             estado: "pendiente",
           }, { onConflict: "turno_id", ignoreDuplicates: false })
+          // Si falla (RLS / trigger ausente), la campana de recepción sintetiza la
+          // alerta desde el turno listo_cobrar — solo lo registramos para diagnóstico.
+          if (eAlerta) console.warn("[sala] alerta_cobro no insertada:", eAlerta.message)
         }
         const pacienteIdFinal = ensPostAtencion.clienteId || turno.pacienteId
         if (pacienteIdFinal) {
@@ -17167,7 +17196,33 @@ function AlertasCobroBell({ data, setData, clinic, role, onPersist }) {
   const [metodo, setMetodo] = useState("tarjeta")
   const [cobroPhase, setCobroPhase] = useState("form")
   const cobroTimersRef = useRef([])
-  const pend = (data.alertasCobro || []).filter(a => a.clinicId === clinic && a.estado === "pendiente")
+  // Alertas reales + sintéticas: si un turno quedó "listo_cobrar" sin fila en
+  // alertas_cobro (trigger de BD ausente o insert fallido), igual debe poder cobrarse.
+  const pend = useMemo(() => {
+    const reales = (data.alertasCobro || []).filter(a => +a.clinicId === +clinic && a.estado === "pendiente")
+    const turnosConAlerta = new Set(reales.map(a => +a.turnoId))
+    const cobradas = new Set((data.alertasCobro || []).filter(a => a.estado !== "pendiente").map(a => +a.turnoId))
+    const sinteticas = (data.clinics?.[clinic]?.turnos || [])
+      .filter(t => t.estado === "listo_cobrar" && !turnosConAlerta.has(+t.id) && !cobradas.has(+t.id))
+      .map(t => {
+        const srv = (data.servicios || []).find(s => s.id === t.servicioFacturadoId) || (data.servicios || []).find(s => s.nombre === t.servicio)
+        const precio = +(srv?.precio || 0)
+        return {
+          id: `turno-${t.id}`,
+          clinicId: +clinic,
+          turnoId: t.id,
+          paciente: t.cliente || "Paciente",
+          servicio: srv?.nombre || t.servicio || "Servicio",
+          montoServicio: precio,
+          montoInsumos: 0,
+          montoTotal: precio,
+          insumos: [],
+          estado: "pendiente",
+          sintetica: true,
+        }
+      })
+    return [...reales, ...sinteticas]
+  }, [data.alertasCobro, data.clinics, data.servicios, clinic])
 
   const clearCobroTimers = useCallback(() => {
     cobroTimersRef.current.forEach(id => clearTimeout(id))
