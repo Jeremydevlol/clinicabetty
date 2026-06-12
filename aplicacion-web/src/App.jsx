@@ -1696,7 +1696,7 @@ function Btn({ children, onClick, variant="primary", sm, disabled, style: styleP
 function TabBar({ tabs, active, onChange }) {
   return (
     <div style={{
-      display: "flex", gap: 3,
+      display: "flex", gap: 3, flexWrap: "wrap",
       background: "linear-gradient(135deg, rgba(241,245,249,0.75) 0%, rgba(226,232,240,0.55) 100%)",
       backdropFilter: "blur(14px) saturate(180%)",
       WebkitBackdropFilter: "blur(14px) saturate(180%)",
@@ -1705,6 +1705,7 @@ function TabBar({ tabs, active, onChange }) {
       border: "1px solid rgba(255,255,255,0.5)",
       boxShadow: "0 1px 2px rgba(255,255,255,0.6) inset, 0 4px 12px -4px rgba(15,23,42,0.08)",
       width: "fit-content",
+      maxWidth: "100%",
       marginBottom: 18,
     }}>
       {tabs.map(t => (
@@ -4799,6 +4800,8 @@ function Contabilidad({ data, clinic, setData }) {
   // ── Facturación y libros contables (derivados, siempre al día) ──
   const [ivaPct, setIvaPct] = useState(0) // 0 = exento sanitario (art. 20.Uno.3º LIVA)
   const [buscaFactura, setBuscaFactura] = useState("")
+  const [libroVista, setLibroVista] = useState("diario")
+  const [analisisVista, setAnalisisVista] = useState("doctor")
   const facturas = useMemo(
     () => derivarFacturas({ tpvMovimientos: data.tpv?.movimientos, alertasCobro, clinic, turnos }),
     [data.tpv?.movimientos, alertasCobro, clinic, turnos],
@@ -4891,13 +4894,36 @@ function Contabilidad({ data, clinic, setData }) {
       <TabBar tabs={[
         {id:"resumen",label:"Resumen"},
         {id:"facturas",label:`Facturación (${facturas.length})`},
-        {id:"diario",label:"Libro diario"},
-        {id:"mayor",label:"Libro mayor"},
-        {id:"doctor",label:"Por doctor"},
-        {id:"servicio",label:"Por servicio"},
-        {id:"pendientes",label:`Pendientes (${turnosHoy.length})`},
+        {id:"libros",label:"Asientos contables"},
+        {id:"analisis",label:"Análisis"},
         {id:"movimientos",label:"Movimientos"},
       ]} active={tab} onChange={setTab}/>
+
+      {/* Sub-vistas: libros contables y análisis */}
+      {tab === "libros" && (
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          {[{id:"diario",label:"Libro diario"},{id:"mayor",label:"Libro mayor"}].map(v => (
+            <button key={v.id} type="button" onClick={()=>setLibroVista(v.id)} style={{
+              border:`1px solid ${libroVista===v.id?C.violet:C.border}`,
+              background:libroVista===v.id?C.violetLight:C.card,
+              color:libroVista===v.id?C.violetDark:C.muted,
+              borderRadius:999,padding:"7px 16px",fontSize:12.5,fontWeight:700,cursor:"pointer",
+            }}>{v.label}</button>
+          ))}
+        </div>
+      )}
+      {tab === "analisis" && (
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          {[{id:"doctor",label:"Por doctor"},{id:"servicio",label:"Por servicio"}].map(v => (
+            <button key={v.id} type="button" onClick={()=>setAnalisisVista(v.id)} style={{
+              border:`1px solid ${analisisVista===v.id?C.violet:C.border}`,
+              background:analisisVista===v.id?C.violetLight:C.card,
+              color:analisisVista===v.id?C.violetDark:C.muted,
+              borderRadius:999,padding:"7px 16px",fontSize:12.5,fontWeight:700,cursor:"pointer",
+            }}>{v.label}</button>
+          ))}
+        </div>
+      )}
 
       {tab === "facturas" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
@@ -4945,7 +4971,7 @@ function Contabilidad({ data, clinic, setData }) {
         </div>
       )}
 
-      {tab === "diario" && (
+      {tab === "libros" && libroVista === "diario" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:14}}>
             <div>
@@ -4984,7 +5010,7 @@ function Contabilidad({ data, clinic, setData }) {
         </div>
       )}
 
-      {tab === "mayor" && (
+      {tab === "libros" && libroVista === "mayor" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>Libro mayor — saldos por cuenta</div>
           <div style={{fontSize:11.5,color:C.muted,marginBottom:14}}>Acumulado de débitos y créditos del libro diario. Saldo positivo = deudor, negativo = acreedor.</div>
@@ -5030,7 +5056,7 @@ function Contabilidad({ data, clinic, setData }) {
         </div>
       )}
 
-      {tab === "doctor" && (
+      {tab === "analisis" && analisisVista === "doctor" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Facturación por doctor (servicios realizados)</div>
           {porDoctor.length === 0 ? (
@@ -5054,7 +5080,7 @@ function Contabilidad({ data, clinic, setData }) {
         </div>
       )}
 
-      {tab === "servicio" && (
+      {tab === "analisis" && analisisVista === "servicio" && (
         <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Facturación por categoría (movimientos)</div>
           {porServicio.length === 0 ? (
@@ -5076,8 +5102,8 @@ function Contabilidad({ data, clinic, setData }) {
         </div>
       )}
 
-      {tab === "pendientes" && (
-        <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
+      {tab === "resumen" && (
+        <div style={{background:C.card,borderRadius:16,padding:22,boxShadow:"0 1px 3px rgba(0,0,0,.06)",marginTop:14}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Citas pendientes de ejecutar — hoy ({TODAY})</div>
           {turnosHoy.length === 0 ? (
             <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:13}}>No hay citas pendientes para hoy</div>
@@ -9823,11 +9849,11 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
             <Sparkles size={20} color={C.violet} />
-            <span style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Asistente IA (móvil)</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Asistente IA</span>
           </div>
           <p style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.45 }}>
-            <strong>Dictar:</strong> tocá el micrófono, hablá el cobro y cuando el navegador deje de escuchar se envía solo a la IA y se rellenan ticket y medio de pago.
-            También podés escribir y usar <strong>Rellenar con IA</strong>. Clave en <code style={codeStyle(C.card)}>.env.local</code> (reiniciá Vite si la cambiás).
+            <strong>Dictar:</strong> tocá el micrófono y decí el cobro — al terminar de hablar se arma solo el ticket con el medio de pago.
+            También podés escribirlo y tocar <strong>Rellenar con IA</strong>.
           </p>
           <textarea
             value={iaTexto}
@@ -17945,6 +17971,24 @@ export default function App() {
       serviciosBoot = (srvs || []).map(mapServicioRow)
       if (seq !== refreshSeqRef.current) return
     }
+    // TPV, sesiones de caja y alertas de cobro NO vienen en el bootstrap del backend:
+    // cargarlas siempre directo de Supabase (antes solo las cargaba el fallback y el
+    // TPV/Facturación quedaban vacíos cuando el bootstrap respondía bien).
+    const [{ data: tpvMovsBoot }, { data: tpvSesionesBoot }, { data: alertasBoot }] = await Promise.all([
+      supabase
+        .from("tpv_movimientos")
+        .select("id, fecha, clinic_id, metodo, monto, concepto, comprobante, tipo, cat_salida, notas")
+        .order("id"),
+      supabase
+        .from("tpv_caja_sesiones")
+        .select("id, clinic_id, fecha, estado, apertura_at, cierre_at, fondo_inicial, conteo_apertura, conteo_cierre_efectivo, cierre_tarjeta, cierre_transferencia, cierre_banco, teorico_efectivo, teorico_tarjeta, teorico_transferencia, diferencia_efectivo, diferencia_tarjeta, diferencia_transferencia, notas_cierre")
+        .order("apertura_at", { ascending: false })
+        .limit(120),
+      supabase
+        .from("alertas_cobro")
+        .select("id, clinic_id, turno_id, cliente, servicio, servicio_id, monto_servicio, monto_insumos, monto_total, insumos, estado, metodo_pago, creado")
+        .order("id"),
+    ])
     if (seq !== refreshSeqRef.current) return
     setDataRaw(prev => {
       const mergedClinics = { ...(prev.clinics || {}), ...(j.clinicsData || {}) }
@@ -17960,6 +18004,37 @@ export default function App() {
         pedidosProveedor: j.pedidosProveedor || [],
         incidenciasProveedor: j.incidenciasProveedor || [],
         trasladosInternos: j.trasladosInternos || [],
+        tpv: {
+          movimientos: (tpvMovsBoot || []).map(m => ({
+            id: m.id,
+            fecha: m.fecha,
+            clinicId: m.clinic_id,
+            metodo: m.metodo || "efectivo",
+            monto: +m.monto || 0,
+            concepto: m.concepto || "",
+            comprobante: m.comprobante || "",
+            tipo: m.tipo === "salida" ? "salida" : "ingreso",
+            catSalida: m.cat_salida || "",
+            notas: m.notas || "",
+          })),
+          cierres: prev.tpv?.cierres || [],
+          sesiones: (tpvSesionesBoot || []).map(mapCajaSesionRow).filter(Boolean),
+        },
+        alertasCobro: (alertasBoot || []).map(a => ({
+          id: a.id,
+          clinicId: a.clinic_id,
+          turnoId: a.turno_id,
+          paciente: a.cliente || "",
+          servicio: a.servicio || "",
+          servicioId: a.servicio_id,
+          montoServicio: +a.monto_servicio || 0,
+          montoInsumos: +a.monto_insumos || 0,
+          montoTotal: +a.monto_total || 0,
+          insumos: Array.isArray(a.insumos) ? a.insumos : [],
+          estado: a.estado || "pendiente",
+          metodoPago: a.metodo_pago || null,
+          creado: a.creado || null,
+        })),
       }
     })
     if (seq !== refreshSeqRef.current) return
