@@ -4638,7 +4638,7 @@ function generarLibroMayor(asientos) {
  * Deriva facturas simplificadas de los cobros del TPV (1 cobro = 1 factura),
  * numeradas por año en orden cronológico: F-2026-0001, F-2026-0002…
  */
-function derivarFacturas({ tpvMovimientos, alertasCobro, clinic }) {
+function derivarFacturas({ tpvMovimientos, alertasCobro, clinic, turnos }) {
   const cobros = (tpvMovimientos || [])
     .filter(m => m.tipo === "ingreso" && (+m.clinicId === +clinic || m.clinicId == null))
     .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || ((a.id || 0) - (b.id || 0)))
@@ -4648,13 +4648,14 @@ function derivarFacturas({ tpvMovimientos, alertasCobro, clinic }) {
     porAnio[anio] = (porAnio[anio] || 0) + 1
     const tid = turnoIdDeConcepto(m.concepto)
     const alerta = tid ? (alertasCobro || []).find(a => +a.turnoId === tid) : null
-    const cliente = alerta?.paciente || alerta?.cliente
+    const turno = tid ? (turnos || []).find(t => +t.id === tid) : null
+    const cliente = alerta?.paciente || alerta?.cliente || turno?.cliente
       || String(m.concepto || "").split("—")[1]?.trim() || "Cliente"
     return {
       numero: `F-${anio}-${String(porAnio[anio]).padStart(4, "0")}`,
       fecha: m.fecha,
       cliente,
-      servicio: alerta?.servicio || "Servicios de medicina estética",
+      servicio: alerta?.servicio || turno?.servicio || "Servicios de medicina estética",
       montoServicio: +(alerta?.montoServicio ?? m.monto) || 0,
       montoInsumos: +(alerta?.montoInsumos ?? 0) || 0,
       insumos: Array.isArray(alerta?.insumos) ? alerta.insumos : [],
@@ -4799,8 +4800,8 @@ function Contabilidad({ data, clinic, setData }) {
   const [ivaPct, setIvaPct] = useState(0) // 0 = exento sanitario (art. 20.Uno.3º LIVA)
   const [buscaFactura, setBuscaFactura] = useState("")
   const facturas = useMemo(
-    () => derivarFacturas({ tpvMovimientos: data.tpv?.movimientos, alertasCobro, clinic }),
-    [data.tpv?.movimientos, alertasCobro, clinic],
+    () => derivarFacturas({ tpvMovimientos: data.tpv?.movimientos, alertasCobro, clinic, turnos }),
+    [data.tpv?.movimientos, alertasCobro, clinic, turnos],
   )
   const facturasFiltradas = useMemo(() => {
     const q = buscaFactura.trim().toLowerCase()
