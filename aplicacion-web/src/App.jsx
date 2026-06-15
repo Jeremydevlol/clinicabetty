@@ -471,6 +471,7 @@ const SECTION_ROLES = {
   contabilidad:  ["encargado","gerente"],
   servicios:     ["encargado","gerente"],
   personal:      ["encargado","gerente"],
+  rrhh:          ["recepcionista","especialista","encargado","gerente"],
   bonos:         ["recepcionista","encargado","gerente"],
   tpv:           ["recepcionista","encargado","gerente"],
   marketing:     ["encargado","gerente"],
@@ -8547,6 +8548,367 @@ function PersonalTurnos({ data, setData, role, clinic }) {
             </div>
           </div>
         )}
+      </Modal>
+    </div>
+  )
+}
+
+// ─── SECTION: CONTROL HORARIO / RRHH ─────────────────────────
+const AUSENCIA_TIPOS = { vacaciones: "Vacaciones", enfermedad: "Baja médica", permiso: "Permiso", falta: "Falta", otro: "Otro" }
+function horasDeFichaje(f) {
+  if (!f?.entrada_at || !f?.salida_at) return 0
+  let ms = new Date(f.salida_at) - new Date(f.entrada_at)
+  if (f.almuerzo_inicio_at && f.almuerzo_fin_at) ms -= (new Date(f.almuerzo_fin_at) - new Date(f.almuerzo_inicio_at))
+  return Math.max(0, ms / 3600000)
+}
+const hhmm = ts => ts ? new Date(ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—"
+const mapFichajeRow = r => ({
+  id: r.id, clinicId: r.clinic_id, empleadoId: r.empleado_id, fecha: r.fecha,
+  entrada_at: r.entrada_at, almuerzo_inicio_at: r.almuerzo_inicio_at, almuerzo_fin_at: r.almuerzo_fin_at,
+  salida_at: r.salida_at, notas: r.notas || "",
+})
+const mapAusenciaRow = r => ({
+  id: r.id, clinicId: r.clinic_id, empleadoId: r.empleado_id, tipo: r.tipo, fechaInicio: r.fecha_inicio,
+  fechaFin: r.fecha_fin, estado: r.estado, motivo: r.motivo || "", aprobadoPor: r.aprobado_por, creado: r.created_at,
+})
+
+function ControlHorario({ data, clinic, role, sessionEmail }) {
+  const compact = useMediaQuery("(max-width: 980px)")
+  const esAdmin = role === "gerente" || normalizeRol(role) === "encargado"
+  const miEmp = useMemo(
+    () => (data.empleados || []).find(e => String(e.email || "").toLowerCase() === String(sessionEmail || "").toLowerCase()) || null,
+    [data.empleados, sessionEmail],
+  )
+  const empById = useMemo(() => Object.fromEntries((data.empleados || []).map(e => [e.id, e])), [data.empleados])
+  const empleadosClinica = useMemo(
+    () => (data.empleados || []).filter(e => +e.clinicId === +clinic),
+    [data.empleados, clinic],
+  )
+  const [tab, setTab] = useState("jornada")
+  const [miFichaje, setMiFichaje] = useState(null)
+  const [fichajes, setFichajes] = useState([])      // de la clínica (admin)
+  const [ausencias, setAusencias] = useState([])
+  const [fechaAsist, setFechaAsist] = useState(TODAY)
+  const [busy, setBusy] = useState(false)
+  const [tick, setTick] = useState(0) // refrescar reloj
+  const [openAus, setOpenAus] = useState(false)
+  const [formAus, setFormAus] = useState({ empleadoId: "", tipo: "vacaciones", fechaInicio: TODAY, fechaFin: TODAY, motivo: "" })
+
+  useEffect(() => { const iv = setInterval(() => setTick(t => t + 1), 30000); return () => clearInterval(iv) }, [])
+
+  const cargar = useCallback(async () => {
+    if (!import.meta.env.VITE_SUPABASE_URL) return
+    // Mi fichaje de hoy
+    if (miEmp) {
+      const { data: mf } = await supabase.from("fichajes")
+        .select("id, clinic_id, empleado_id, fecha, entrada_at, almuerzo_inicio_at, almuerzo_fin_at, salida_at, notas")
+        .eq("empleado_id", miEmp.id).eq("fecha", TODAY).maybeSingle()
+      setMiFichaje(mf ? mapFichajeRow(mf) : null)
+    }
+    // Admin: fichajes de la clínica (últimos 45 días) + ausencias
+    if (esAdmin) {
+      const desde = new Date(); desde.setDate(desde.getDate() - 45)
+      const { data: fs } = await supabase.from("fichajes")
+        .select("id, clinic_id, empleado_id, fecha, entrada_at, almuerzo_inicio_at, almuerzo_fin_at, salida_at, notas")
+        .eq("clinic_id", clinic).gte("fecha", desde.toISOString().slice(0, 10)).order("fecha", { ascending: false })
+      setFichajes((fs || []).map(mapFichajeRow))
+      const { data: au } = await supabase.from("ausencias")
+        .select("id, clinic_id, empleado_id, tipo, fecha_inicio, fecha_fin, estado, motivo, aprobado_por, created_at")
+        .eq("clinic_id", clinic).order("fecha_inicio", { ascending: false })
+      setAusencias((au || []).map(mapAusenciaRow))
+    } else if (miEmp) {
+      const { data: au } = await supabase.from("ausencias")
+        .select("id, clinic_id, empleado_id, tipo, fecha_inicio, fecha_fin, estado, motivo, aprobado_por, created_at")
+        .eq("empleado_id", miEmp.id).order("fecha_inicio", { ascending: false })
+      setAusencias((au || []).map(mapAusenciaRow))
+    }
+  }, [miEmp, esAdmin, clinic])
+
+  useEffect(() => { void cargar() }, [cargar])
+
+  // ── Fichar ──
+  const fichar = async campo => {
+    if (!miEmp) { alert("Tu usuario no está vinculado a una ficha de empleado."); return }
+    setBusy(true)
+    try {
+      const nowIso = new Date().toISOString()
+      if (campo === "entrada_at" && !miFichaje) {
+        const { data: ins, error } = await supabase.from("fichajes")
+          .insert({ clinic_id: miEmp.clinicId || clinic, empleado_id: miEmp.id, fecha: TODAY, entrada_at: nowIso })
+          .select("id, clinic_id, empleado_id, fecha, entrada_at, almuerzo_inicio_at, almuerzo_fin_at, salida_at, notas").single()
+        if (error) { alert("No se pudo fichar: " + (error.message || error)); return }
+        setMiFichaje(mapFichajeRow(ins))
+      } else if (miFichaje) {
+        const { data: upd, error } = await supabase.from("fichajes")
+          .update({ [campo]: nowIso }).eq("id", miFichaje.id)
+          .select("id, clinic_id, empleado_id, fecha, entrada_at, almuerzo_inicio_at, almuerzo_fin_at, salida_at, notas").single()
+        if (error) { alert("No se pudo registrar: " + (error.message || error)); return }
+        setMiFichaje(mapFichajeRow(upd))
+      }
+      void cargar()
+    } finally { setBusy(false) }
+  }
+
+  // ── Ausencias ──
+  const guardarAusencia = async () => {
+    const empId = esAdmin ? +formAus.empleadoId : miEmp?.id
+    if (!empId) { alert("Elegí un empleado."); return }
+    if (!formAus.fechaInicio || !formAus.fechaFin || formAus.fechaFin < formAus.fechaInicio) { alert("Rango de fechas inválido."); return }
+    setBusy(true)
+    try {
+      const empClinic = empById[empId]?.clinicId || clinic
+      const { error } = await supabase.from("ausencias").insert({
+        clinic_id: empClinic, empleado_id: empId, tipo: formAus.tipo,
+        fecha_inicio: formAus.fechaInicio, fecha_fin: formAus.fechaFin, motivo: formAus.motivo || "",
+        estado: esAdmin ? "aprobada" : "pendiente",
+      })
+      if (error) { alert("No se pudo guardar: " + (error.message || error)); return }
+      setOpenAus(false)
+      setFormAus({ empleadoId: "", tipo: "vacaciones", fechaInicio: TODAY, fechaFin: TODAY, motivo: "" })
+      void cargar()
+    } finally { setBusy(false) }
+  }
+  const resolverAusencia = async (a, estado) => {
+    if (!esAdmin) return
+    const { error } = await supabase.from("ausencias").update({ estado, aprobado_por: miEmp?.id ?? null }).eq("id", a.id)
+    if (error) { alert("No se pudo actualizar: " + (error.message || error)); return }
+    void cargar()
+  }
+  const borrarAusencia = async a => {
+    if (!window.confirm("¿Eliminar esta solicitud?")) return
+    const { error } = await supabase.from("ausencias").delete().eq("id", a.id)
+    if (error) { alert("No se pudo eliminar: " + (error.message || error)); return }
+    void cargar()
+  }
+
+  // ── Rendimiento (mes actual) ──
+  const rendimiento = useMemo(() => {
+    const mes = TODAY.slice(0, 7)
+    const turnos = (data.clinics?.[clinic]?.turnos || [])
+    const servicios = data.servicios || []
+    const precioDe = t => {
+      const s = servicios.find(x => x.id === t.servicioFacturadoId) || servicios.find(x => x.nombre === t.servicio)
+      return +(s?.precio || 0)
+    }
+    return empleadosClinica.map(e => {
+      const fichajesMes = fichajes.filter(f => +f.empleadoId === +e.id && String(f.fecha).slice(0, 7) === mes)
+      const diasTrab = fichajesMes.filter(f => f.entrada_at).length
+      const horas = fichajesMes.reduce((a, f) => a + horasDeFichaje(f), 0)
+      const turnosAt = turnos.filter(t => +t.profesionalId === +e.id && (t.estado === "finalizado" || t.estado === "listo_cobrar") && String(t.fecha).slice(0, 7) === mes)
+      const ingresos = turnosAt.reduce((a, t) => a + precioDe(t), 0)
+      const ausMes = ausencias.filter(a => +a.empleadoId === +e.id && a.estado === "aprobada" && String(a.fechaInicio).slice(0, 7) <= mes && String(a.fechaFin).slice(0, 7) >= mes).length
+      return { emp: e, diasTrab, horas, turnos: turnosAt.length, ingresos, ausencias: ausMes }
+    }).sort((a, b) => b.ingresos - a.ingresos)
+  }, [empleadosClinica, fichajes, ausencias, data.clinics, data.servicios, clinic])
+
+  // Estado de la jornada de hoy
+  const estadoJornada = (() => {
+    const f = miFichaje
+    if (!f || !f.entrada_at) return "sin_iniciar"
+    if (f.salida_at) return "finalizada"
+    if (f.almuerzo_inicio_at && !f.almuerzo_fin_at) return "almuerzo"
+    return "trabajando"
+  })()
+  const horasHoy = miFichaje ? horasDeFichaje(miFichaje) : 0
+  void tick // releer reloj
+
+  const card = { background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }
+  const tabs = [{ id: "jornada", label: "Mi jornada" }]
+  if (esAdmin) tabs.push({ id: "asistencia", label: "Asistencia" })
+  tabs.push({ id: "ausencias", label: esAdmin ? `Ausencias (${ausencias.filter(a => a.estado === "pendiente").length})` : "Mis ausencias" })
+  if (esAdmin) tabs.push({ id: "rendimiento", label: "Rendimiento" })
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 800 }}>Control horario</h2>
+        <p style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Fichaje de entrada/salida, almuerzos, ausencias y rendimiento del equipo.</p>
+      </div>
+
+      <TabBar tabs={tabs} active={tab} onChange={setTab} />
+
+      {tab === "jornada" && (
+        <div style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1.2fr 1fr", gap: 16 }}>
+          <div style={{ ...card, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <Clock size={20} color={C.violet} />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>{miEmp?.nombre || "—"}</div>
+                <div style={{ fontSize: 12, color: C.muted }}>{new Date().toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}</div>
+              </div>
+              <span style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 800, padding: "4px 12px", borderRadius: 20,
+                background: estadoJornada === "trabajando" ? "rgba(240,253,244,.9)" : estadoJornada === "almuerzo" ? "rgba(255,251,235,.9)" : estadoJornada === "finalizada" ? "rgba(238,242,255,.9)" : "rgba(241,245,249,.9)",
+                color: estadoJornada === "trabajando" ? "#047857" : estadoJornada === "almuerzo" ? "#B45309" : estadoJornada === "finalizada" ? C.violetDark : C.muted }}>
+                {estadoJornada === "trabajando" ? "● Trabajando" : estadoJornada === "almuerzo" ? "● En almuerzo" : estadoJornada === "finalizada" ? "Jornada cerrada" : "Sin fichar"}
+              </span>
+            </div>
+
+            {!miEmp ? (
+              <div style={{ fontSize: 13, color: "#B45309", background: "rgba(255,251,235,.9)", border: "1px solid rgba(253,230,138,.7)", borderRadius: 10, padding: "10px 14px" }}>
+                Tu usuario no está vinculado a una ficha de empleado, así que no podés fichar. Avisá a administración.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, textAlign: "center" }}>
+                  {[["Entrada", miFichaje?.entrada_at], ["Almuerzo", miFichaje?.almuerzo_inicio_at], ["Vuelta", miFichaje?.almuerzo_fin_at], ["Salida", miFichaje?.salida_at]].map(([l, v]) => (
+                    <div key={l} style={{ background: C.subtle, borderRadius: 10, padding: "10px 6px" }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: v ? C.text : "#CBD5E1", fontVariantNumeric: "tabular-nums" }}>{hhmm(v)}</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, marginTop: 2, textTransform: "uppercase", letterSpacing: "0.04em" }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {estadoJornada === "sin_iniciar" && <Btn onClick={() => void fichar("entrada_at")} disabled={busy} style={{ flex: 1, justifyContent: "center", minHeight: 46 }}><Clock size={16} /> Fichar entrada</Btn>}
+                  {estadoJornada === "trabajando" && !miFichaje?.almuerzo_inicio_at && <Btn variant="outline" onClick={() => void fichar("almuerzo_inicio_at")} disabled={busy} style={{ flex: 1, justifyContent: "center", minHeight: 46 }}>Iniciar almuerzo</Btn>}
+                  {estadoJornada === "almuerzo" && <Btn variant="outline" onClick={() => void fichar("almuerzo_fin_at")} disabled={busy} style={{ flex: 1, justifyContent: "center", minHeight: 46 }}>Terminar almuerzo</Btn>}
+                  {(estadoJornada === "trabajando") && <Btn onClick={() => void fichar("salida_at")} disabled={busy} style={{ flex: 1, justifyContent: "center", minHeight: 46, background: C.danger }}>Fichar salida</Btn>}
+                  {estadoJornada === "finalizada" && <div style={{ flex: 1, textAlign: "center", fontSize: 14, fontWeight: 700, color: C.violetDark, padding: "12px 0" }}>Trabajaste {horasHoy.toFixed(2)} h hoy ✓</div>}
+                </div>
+                {estadoJornada !== "finalizada" && estadoJornada !== "sin_iniciar" && (
+                  <div style={{ fontSize: 12, color: C.muted, textAlign: "center" }}>Llevas <strong>{horasHoy.toFixed(2)} h</strong> hoy</div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div style={{ ...card }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Mis ausencias / vacaciones</div>
+            <Btn variant="outline" sm onClick={() => { setFormAus({ empleadoId: miEmp ? String(miEmp.id) : "", tipo: "vacaciones", fechaInicio: TODAY, fechaFin: TODAY, motivo: "" }); setOpenAus(true) }} style={{ marginBottom: 12 }}><Plus size={13} /> Solicitar</Btn>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflowY: "auto" }}>
+              {(esAdmin ? ausencias.filter(a => +a.empleadoId === +(miEmp?.id || -1)) : ausencias).length === 0 && <span style={{ fontSize: 12, color: C.muted }}>Sin solicitudes.</span>}
+              {(esAdmin ? ausencias.filter(a => +a.empleadoId === +(miEmp?.id || -1)) : ausencias).map(a => (
+                <div key={a.id} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 700 }}>{AUSENCIA_TIPOS[a.tipo] || a.tipo}</div>
+                    <div style={{ fontSize: 11.5, color: C.muted }}>{fmtDate(a.fechaInicio)} → {fmtDate(a.fechaFin)}</div>
+                  </div>
+                  <Badge type={a.estado === "aprobada" ? "confirmado" : a.estado === "rechazada" ? "cancelado" : "pendiente"}>{a.estado}</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "asistencia" && esAdmin && (
+        <div style={card}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Asistencia del día</div>
+            <input type="date" style={{ ...inp, width: "auto" }} value={fechaAsist} onChange={e => setFechaAsist(e.target.value)} />
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <THead cols={["Empleado", "Entrada", "Almuerzo", "Salida", "Horas", "Estado"]} />
+              <tbody>
+                {empleadosClinica.map(e => {
+                  const f = fichajes.find(x => +x.empleadoId === +e.id && x.fecha === fechaAsist)
+                  const aus = ausencias.find(a => +a.empleadoId === +e.id && a.estado === "aprobada" && a.fechaInicio <= fechaAsist && a.fechaFin >= fechaAsist)
+                  const h = f ? horasDeFichaje(f) : 0
+                  return (
+                    <tr key={e.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
+                      <td style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{e.nombre}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{hhmm(f?.entrada_at)}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12.5, fontVariantNumeric: "tabular-nums", color: C.muted }}>{f?.almuerzo_inicio_at ? `${hhmm(f.almuerzo_inicio_at)}–${hhmm(f.almuerzo_fin_at)}` : "—"}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{hhmm(f?.salida_at)}</td>
+                      <td style={{ padding: "10px 12px", fontSize: 12.5, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{h > 0 ? `${h.toFixed(2)} h` : "—"}</td>
+                      <td style={{ padding: "10px 12px" }}>
+                        {aus ? <Badge type="gray">{AUSENCIA_TIPOS[aus.tipo] || aus.tipo}</Badge>
+                          : f?.salida_at ? <Badge type="confirmado">Completa</Badge>
+                          : f?.entrada_at ? <Badge type="pendiente">En curso</Badge>
+                          : <Badge type="cancelado">Sin fichar</Badge>}
+                      </td>
+                    </tr>
+                  )
+                })}
+                {empleadosClinica.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: C.muted }}>Sin empleados en esta clínica.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "ausencias" && (
+        <div style={card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{esAdmin ? "Solicitudes de ausencia / vacaciones" : "Mis solicitudes"}</div>
+            <Btn sm onClick={() => { setFormAus({ empleadoId: esAdmin ? "" : (miEmp ? String(miEmp.id) : ""), tipo: "vacaciones", fechaInicio: TODAY, fechaFin: TODAY, motivo: "" }); setOpenAus(true) }}><Plus size={13} /> {esAdmin ? "Registrar ausencia" : "Solicitar"}</Btn>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <THead cols={esAdmin ? ["Empleado", "Tipo", "Desde", "Hasta", "Motivo", "Estado", ""] : ["Tipo", "Desde", "Hasta", "Motivo", "Estado", ""]} />
+              <tbody>
+                {ausencias.map(a => (
+                  <tr key={a.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
+                    {esAdmin && <td style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{empById[a.empleadoId]?.nombre || "—"}</td>}
+                    <td style={{ padding: "10px 12px", fontSize: 12.5 }}>{AUSENCIA_TIPOS[a.tipo] || a.tipo}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, color: C.muted }}>{fmtDate(a.fechaInicio)}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, color: C.muted }}>{fmtDate(a.fechaFin)}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.motivo || "—"}</td>
+                    <td style={{ padding: "10px 12px" }}><Badge type={a.estado === "aprobada" ? "confirmado" : a.estado === "rechazada" ? "cancelado" : "pendiente"}>{a.estado}</Badge></td>
+                    <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}>
+                      {esAdmin && a.estado === "pendiente" && (
+                        <>
+                          <Btn sm onClick={() => void resolverAusencia(a, "aprobada")}>Aprobar</Btn>
+                          <Btn sm variant="outline" style={{ marginLeft: 6 }} onClick={() => void resolverAusencia(a, "rechazada")}>Rechazar</Btn>
+                        </>
+                      )}
+                      {(esAdmin || a.estado === "pendiente") && <Btn sm variant="danger" style={{ marginLeft: 6 }} onClick={() => void borrarAusencia(a)}><Trash2 size={11} /></Btn>}
+                    </td>
+                  </tr>
+                ))}
+                {ausencias.length === 0 && <tr><td colSpan={esAdmin ? 7 : 6} style={{ textAlign: "center", padding: 24, color: C.muted }}>Sin solicitudes.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "rendimiento" && esAdmin && (
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Rendimiento del equipo — {new Date().toLocaleDateString("es-ES", { month: "long", year: "numeric" })}</div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 14 }}>Días fichados, horas trabajadas, turnos atendidos e ingresos generados este mes.</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <THead cols={["Empleado", "Rol", "Días", "Horas", "Turnos", "Ingresos", "Ausencias"]} />
+              <tbody>
+                {rendimiento.map(r => (
+                  <tr key={r.emp.id} style={{ borderBottom: `1px solid ${C.subtle}` }}>
+                    <td style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{r.emp.nombre}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: C.muted }}>{ROLE_LABEL[r.emp.cargo] || r.emp.cargo}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{r.diasTrab}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.horas.toFixed(1)} h</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>{r.turnos}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, fontWeight: 700, color: C.success, fontVariantNumeric: "tabular-nums" }}>{fmt(r.ingresos)}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12.5, color: r.ausencias ? "#B45309" : C.muted, fontVariantNumeric: "tabular-nums" }}>{r.ausencias}</td>
+                  </tr>
+                ))}
+                {rendimiento.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: C.muted }}>Sin datos.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <Modal open={openAus} onClose={() => { if (!busy) setOpenAus(false) }} title={esAdmin ? "Registrar ausencia / vacaciones" : "Solicitar ausencia / vacaciones"}
+        footer={<><Btn variant="outline" disabled={busy} onClick={() => setOpenAus(false)}>Cancelar</Btn><Btn disabled={busy} onClick={() => void guardarAusencia()}>{busy ? "Guardando…" : esAdmin ? "Registrar" : "Solicitar"}</Btn></>}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {esAdmin && (
+            <FG label="Empleado" full>
+              <select style={inp} value={formAus.empleadoId} onChange={e => setFormAus(f => ({ ...f, empleadoId: e.target.value }))}>
+                <option value="">Seleccionar…</option>
+                {empleadosClinica.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+              </select>
+            </FG>
+          )}
+          <FG label="Tipo">
+            <select style={inp} value={formAus.tipo} onChange={e => setFormAus(f => ({ ...f, tipo: e.target.value }))}>
+              {Object.entries(AUSENCIA_TIPOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </FG>
+          <FG label="Desde"><input type="date" style={inp} value={formAus.fechaInicio} onChange={e => setFormAus(f => ({ ...f, fechaInicio: e.target.value }))} /></FG>
+          <FG label="Hasta"><input type="date" style={inp} value={formAus.fechaFin} onChange={e => setFormAus(f => ({ ...f, fechaFin: e.target.value }))} /></FG>
+          <FG label="Motivo (opcional)" full><textarea style={{ ...inp, minHeight: 60 }} value={formAus.motivo} onChange={e => setFormAus(f => ({ ...f, motivo: e.target.value }))} /></FG>
+        </div>
       </Modal>
     </div>
   )
@@ -17890,6 +18252,7 @@ const NAV = [
     { id:"contabilidad", label:"Contabilidad",   icon:DollarSign },
     { id:"servicios",    label:"Servicios",      icon:Sparkles },
     { id:"personal",     label:"Personal",       icon:UserCog },
+    { id:"rrhh",         label:"Control horario", icon:Clock },
   ]},
   { group:"Ventas", items:[
     { id:"bonos",      label:"Bonos y packs", icon:Gift },
@@ -17921,6 +18284,7 @@ const SECTION_PATHS = {
   contabilidad: "/contabilidad",
   servicios: "/servicios",
   personal: "/personal",
+  rrhh: "/control-horario",
   bonos: "/bonos",
   tpv: "/tpv",
   leads: "/leads",
@@ -18512,7 +18876,7 @@ export default function App() {
   const effectiveDoctorCtx = manualDoctorCtx ?? urlDoctorCtx
   const titles = {
     dashboard:"Dashboard", agenda:"Agenda", stock:"Stock", contabilidad:"Contabilidad", servicios:"Servicios",
-    pacientes:"Pacientes — historial clínico", documentos:"Documentos — consentimientos", clientes:"Clientes — CRM", personal:"Personal y turnos", reportes:"Reportes", leads:"Leads — captación", marketing:"Marketing",
+    pacientes:"Pacientes — historial clínico", documentos:"Documentos — consentimientos", clientes:"Clientes — CRM", personal:"Personal y turnos", rrhh:"Control horario", reportes:"Reportes", leads:"Leads — captación", marketing:"Marketing",
     bonos:"Bonos y packs", tpv:"TPV Virtual — Caja", analytics:"Reportes avanzados", reservas:"Reservas online",
     sala:"Sala — Orden de servicio",
     doctor_area:"Área médica (QR)",
@@ -18923,6 +19287,7 @@ export default function App() {
           {section==="contabilidad"  && <Contabilidad  data={data} clinic={clinic} setData={setData}/>}
           {section==="servicios"     && <Servicios     data={data} clinic={clinic} setData={setData} onGoStock={() => goToSection("stock")} onPersist={refreshErpData}/>}
           {section==="personal"      && <PersonalTurnos data={data} setData={setData} role={role} clinic={clinic}/>}
+          {section==="rrhh"          && <ControlHorario data={data} clinic={clinic} role={role} sessionEmail={session?.user}/>}
           {section==="reportes"      && <ReportesExport data={data} clinic={clinic}/>}
           {section==="bonos"         && <BonosPacks data={data} setData={setData} clinic={clinic} role={role} onReloadBonos={() => void syncBonosToState(setData)}/>}
           {section==="tpv"           && <PuntoVenta data={data} setData={setData} clinic={clinic} empleadoId={session?.userId} onPersist={refreshErpData}/>}
