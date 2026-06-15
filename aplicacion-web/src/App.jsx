@@ -457,21 +457,26 @@ const DEMO_USERS = [
   { id:3, user:"gerente",   pass:"demo", role:"gerente",       nombre:"Carlos Gómez" },
 ]
 /** Qué rol puede ver cada sección del menú */
+// Acceso por rol. ACCESO FULL = gerente + encargado (Edwin/Betty = gerente,
+// Gloria/Developer = encargado). El ESPECIALISTA solo trabaja: agenda, sus
+// pacientes, sala, área médica y documentos. No ve ni edita servicios/precios,
+// contabilidad, caja, marketing, reserva online, analytics, reportes, stock,
+// clientes (CRM), personal ni el dashboard financiero.
 const SECTION_ROLES = {
   dashboard:     ["recepcionista","especialista","encargado","gerente"],
   agenda:        ["recepcionista","especialista","encargado","gerente"],
   pacientes:     ["recepcionista","especialista","encargado","gerente"],
-  clientes:      ["recepcionista","especialista","encargado","gerente"],
-  stock:         ["recepcionista","especialista","encargado","gerente"],
+  clientes:      ["recepcionista","encargado","gerente"],
+  stock:         ["recepcionista","encargado","gerente"],
   contabilidad:  ["encargado","gerente"],
-  servicios:     ["encargado","gerente","especialista"],
+  servicios:     ["encargado","gerente"],
   personal:      ["encargado","gerente"],
   bonos:         ["recepcionista","encargado","gerente"],
   tpv:           ["recepcionista","encargado","gerente"],
-  marketing:     ["recepcionista","especialista","encargado","gerente"],
-  reportes:      ["recepcionista","especialista","encargado","gerente"],
-  analytics:     ["encargado","gerente","especialista"],
-  reservas:      ["recepcionista","especialista","encargado","gerente"],
+  marketing:     ["encargado","gerente"],
+  reportes:      ["recepcionista","encargado","gerente"],
+  analytics:     ["encargado","gerente"],
+  reservas:      ["recepcionista","encargado","gerente"],
   sala:          ["especialista","encargado","gerente"],
   doctor_area:   ["especialista","encargado","gerente"],
   configuracion: ["encargado","gerente"],
@@ -6794,8 +6799,10 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
   }
   const delCliente = async () => {
     if (!pSel || !sel) return
-    if (role === "recepcionista") {
-      alert("Solo gerente o encargado puede eliminar fichas.")
+    // Solo gerente/encargado eliminan fichas. El especialista solo trabaja (carga
+    // evolución, consentimientos) pero no borra registros de pacientes.
+    if (role !== "gerente" && normalizeRol(role) !== "encargado") {
+      alert("Solo gerente o encargado puede eliminar fichas de pacientes.")
       return
     }
     const turnosActivos = turnosDelPaciente.filter(t => !["cancelado", "finalizado"].includes(String(t.estado || "")))
