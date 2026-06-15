@@ -1,4 +1,7 @@
-FROM node:20-alpine
+# Node 22: trae WebSocket global nativo. Versiones recientes de @supabase/realtime-js
+# (que arrastra supabase-js) lanzan "Node.js 20 detected without native WebSocket
+# support" al crear el cliente; con Node 22 el createClient funciona sin el paquete ws.
+FROM node:22-alpine
 
 WORKDIR /app
 
