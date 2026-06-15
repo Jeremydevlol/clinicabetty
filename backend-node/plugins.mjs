@@ -1933,23 +1933,30 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey, marketing = {})
           if (req.method === 'GET' && pathNorm.startsWith('/api/erp/bootstrap')) {
             const auth = await withAuth()
             if (auth.error) return sendJson(auth.code, { error: auth.error })
-            const { data: clinics } = await admin.from('clinics').select('id, nombre, modalidad_negocio, clinic_matriz_id').order('id')
-            const clinicIds = (clinics || []).map(c => c.id)
+            const { data: clinicsAll } = await admin.from('clinics').select('id, nombre, modalidad_negocio, clinic_matriz_id').order('id')
+            const allClinicIds = (clinicsAll || []).map(c => c.id)
+            // Aislamiento multi-clínica (RGPD): un empleado que NO es gerente solo puede
+            // ver los datos de SU clínica. Antes el bootstrap devolvía pacientes/historial/
+            // consentimientos de TODAS las clínicas a cualquier empleado (bypass de RLS).
+            const isGerente = auth?.emp?.rol === 'gerente'
+            const ownClinicId = auth?.emp?.clinic_id == null ? null : +auth.emp.clinic_id
+            const clinicIds = isGerente ? allClinicIds : (ownClinicId == null ? [] : allClinicIds.filter(id => +id === ownClinicId))
+            const clinics = isGerente ? (clinicsAll || []) : (clinicsAll || []).filter(c => clinicIds.includes(c.id))
             const { data: emps } = await admin.from('empleados').select('id, clinic_id, nombre, email, tel, rol, activo, especialidad, comision_pct, color').order('id')
-            const { data: clientes } = await admin.from('clientes').select('id, clinic_id, nombre, tel, email, dni, fecha_nacimiento, notas_clinicas, alergias, tratamientos_activos, visitas, fotos, anamnesis, consentimientos, created_at, es_paciente').in('clinic_id', clinicIds).order('id')
-            const { data: turnos } = await admin.from('turnos').select('id, clinic_id, cliente_id, cliente, tel, fecha, hora, cat, servicio, obs, estado, empleado_id, servicio_facturado_id, sesion_medica_borrador').in('clinic_id', clinicIds)
+            const { data: clientes } = clinicIds.length ? await admin.from('clientes').select('id, clinic_id, nombre, tel, email, dni, fecha_nacimiento, notas_clinicas, alergias, tratamientos_activos, visitas, fotos, anamnesis, consentimientos, created_at, es_paciente').in('clinic_id', clinicIds).order('id') : { data: [] }
+            const { data: turnos } = clinicIds.length ? await admin.from('turnos').select('id, clinic_id, cliente_id, cliente, tel, fecha, hora, cat, servicio, obs, estado, empleado_id, servicio_facturado_id, sesion_medica_borrador').in('clinic_id', clinicIds) : { data: [] }
             const clienteIds = (clientes || []).map(c => c.id)
             const { data: hist } = clienteIds.length ? await admin.from('historial_clinico').select('id, cliente_id, fecha, tipo, titulo, detalle, profesional').in('cliente_id', clienteIds).order('id') : { data: [] }
             const { data: arts } = await admin.from('articulos').select('id, nombre, cat, unidad, minimo, costo, proveedor, codigo_barras, foto_url')
-            const { data: apc } = await admin.from('articulos_por_clinica').select('clinic_id, articulo_id, cantidad').in('clinic_id', clinicIds)
-            const { data: movs } = await admin.from('clinic_movimientos').select('id, clinic_id, tipo, fecha, concepto, cat, monto').in('clinic_id', clinicIds)
+            const { data: apc } = clinicIds.length ? await admin.from('articulos_por_clinica').select('clinic_id, articulo_id, cantidad').in('clinic_id', clinicIds) : { data: [] }
+            const { data: movs } = clinicIds.length ? await admin.from('clinic_movimientos').select('id, clinic_id, tipo, fecha, concepto, cat, monto').in('clinic_id', clinicIds) : { data: [] }
             const { data: provs } = await admin.from('proveedores').select('id, nombre, contacto, tel, email').order('id')
             const { data: provProd } = await admin.from('proveedor_productos').select('id, proveedor_id, nombre_producto, costo_ref').order('id')
-            const { data: pedidos } = await admin.from('pedidos_compra').select('id, clinic_id, proveedor_id, fecha, notas, estado, total_estimado').in('clinic_id', clinicIds).order('id')
+            const { data: pedidos } = clinicIds.length ? await admin.from('pedidos_compra').select('id, clinic_id, proveedor_id, fecha, notas, estado, total_estimado').in('clinic_id', clinicIds).order('id') : { data: [] }
             const pedidoIds = (pedidos || []).map(p => p.id)
             const { data: pedidoItems } = pedidoIds.length ? await admin.from('pedido_compra_items').select('id, pedido_id, nombre_producto, cantidad_ordenada, costo_unit').in('pedido_id', pedidoIds) : { data: [] }
-            const { data: incid } = await admin.from('incidencias_proveedor').select('id, clinic_id, proveedor_id, pedido_id, producto, esperado, recibido, faltante, malo, lote, nota, fotos_urls, estado, created_at').in('clinic_id', clinicIds).order('id')
-            const { data: traslados } = await admin.from('traslados_internos').select('id, origen_clinic_id, destino_clinic_id, articulo_id, producto_nombre, cantidad, estado, nota, creado_at, enviado_at, recibido_at').or(`origen_clinic_id.in.(${clinicIds.join(',')}),destino_clinic_id.in.(${clinicIds.join(',')})`).order('id')
+            const { data: incid } = clinicIds.length ? await admin.from('incidencias_proveedor').select('id, clinic_id, proveedor_id, pedido_id, producto, esperado, recibido, faltante, malo, lote, nota, fotos_urls, estado, created_at').in('clinic_id', clinicIds).order('id') : { data: [] }
+            const { data: traslados } = clinicIds.length ? await admin.from('traslados_internos').select('id, origen_clinic_id, destino_clinic_id, articulo_id, producto_nombre, cantidad, estado, nota, creado_at, enviado_at, recibido_at').or(`origen_clinic_id.in.(${clinicIds.join(',')}),destino_clinic_id.in.(${clinicIds.join(',')})`).order('id') : { data: [] }
             const { data: srvs } = await admin.from('servicios').select('id, nombre, cat, duracion, precio, sesiones, descripcion, materiales_articulo_ids, materiales_cantidades').order('id')
             let consentRows = []
             if (clinicIds.length) {
@@ -2027,9 +2034,8 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey, marketing = {})
               if (!itemsByPedido.has(it.pedido_id)) itemsByPedido.set(it.pedido_id, [])
               itemsByPedido.get(it.pedido_id).push({ nombre: it.nombre_producto, cantidad: +it.cantidad_ordenada || 0, costo: +it.costo_unit || 0 })
             }
-            const ownClinicId = auth?.emp?.clinic_id == null ? null : +auth.emp.clinic_id
             const empleadosFiltrados = (emps || []).filter(e => {
-              if (auth?.emp?.rol === 'gerente') return true
+              if (isGerente) return true
               if (ownClinicId == null) return false
               return +e.clinic_id === ownClinicId
             })

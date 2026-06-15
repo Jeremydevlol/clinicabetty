@@ -19,6 +19,17 @@ import {
   ResponsiveContainer, BarChart, Bar, Cell
 } from "recharts"
 import { supabase } from "./utils/supabase"
+/** Headers para los endpoints de IA/OCR del backend: incluyen el access_token de
+ *  Supabase para que el backend pueda autenticar (evita abuso del proxy de OpenAI). */
+async function aiAuthHeaders(base = { "Content-Type": "application/json" }) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token
+    return token ? { ...base, Authorization: `Bearer ${token}` } : base
+  } catch {
+    return base
+  }
+}
 import { textoAHtmlParrafos, armarCuerpoConsentimiento, rellenarPlantilla, varsDesdePaciente, cuerpoConsentimientoParaPdf } from "./consentimientos/rellenarPlantilla.js"
 import { buildConsentimientoPdfDataUrl, uploadConsentPdfDataUrl, downloadPdfFromArchivedHtml } from "./consentimientos/consentimientoPdf.js"
 import { getPlantillasConsentLocales, mergePlantillasConsent } from "./consentimientos/plantillasLocales.js"
@@ -44,7 +55,7 @@ async function callFaceAnalysisFull(imageB64, opts = {}) {
   try {
     const r = await fetch("/api/face-analysis/full", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aiAuthHeaders(),
       body: JSON.stringify({ image_base64: imageB64, includeAi }),
     })
     const j = await r.json().catch(() => null)
@@ -62,7 +73,7 @@ async function callTreatmentPreview(imageB64, opts = {}) {
   try {
     const r = await fetch("/api/treatment-preview", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await aiAuthHeaders(),
       body: JSON.stringify({
         image_base64: imageB64,
         tratamiento: String(opts.tratamiento || "").trim(),
@@ -992,11 +1003,14 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
   const conceptoBase = `Cobro turno #${turnoId} — ${cliente || "Paciente"}`
   const comp = comprobante || `AUTO-TURNO-${turnoId}`
 
+  // supabase-js NO lanza en error de fila/RLS: devuelve { error }. Hay que capturarlo
+  // explícitamente, si no el ingreso "falla" en silencio y la caja queda descuadrada.
+  let dbError = null
   if (import.meta.env.VITE_SUPABASE_URL) {
     try {
       const { data: tpvExists } = await supabase.from("tpv_movimientos").select("id").eq("comprobante", comp).limit(1)
       if (!tpvExists?.length) {
-        await supabase.from("tpv_movimientos").insert({
+        const { error } = await supabase.from("tpv_movimientos").insert({
           fecha,
           clinic_id: clinic,
           metodo: metodo || "efectivo",
@@ -1005,13 +1019,14 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
           comprobante: comp,
           tipo: "ingreso",
         })
+        if (error) dbError = error
       }
-    } catch (e) { console.warn("[cobro] tpv_movimientos:", e?.message || e) }
+    } catch (e) { dbError = e }
     try {
       const conceptoSrv = `${conceptoBase} — servicio`
       const { data: srvExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).eq("concepto", conceptoSrv).limit(1)
       if (!srvExists?.length && ms > 0) {
-        await supabase.from("clinic_movimientos").insert({
+        const { error } = await supabase.from("clinic_movimientos").insert({
           clinic_id: clinic,
           tipo: "ingreso",
           fecha,
@@ -1019,12 +1034,13 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
           cat: "servicios",
           monto: ms,
         })
+        if (error) dbError = error
       }
       if (mi > 0) {
         const conceptoIns = `${conceptoBase} — insumos`
         const { data: insExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).eq("concepto", conceptoIns).limit(1)
         if (!insExists?.length) {
-          await supabase.from("clinic_movimientos").insert({
+          const { error } = await supabase.from("clinic_movimientos").insert({
             clinic_id: clinic,
             tipo: "ingreso",
             fecha,
@@ -1032,12 +1048,13 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
             cat: "materiales",
             monto: mi,
           })
+          if (error) dbError = error
         }
       }
       if (ms <= 0 && mi <= 0) {
         const { data: legacyExists } = await supabase.from("clinic_movimientos").select("id").eq("clinic_id", clinic).ilike("concepto", `%turno #${turnoId}%`).limit(1)
         if (!legacyExists?.length) {
-          await supabase.from("clinic_movimientos").insert({
+          const { error } = await supabase.from("clinic_movimientos").insert({
             clinic_id: clinic,
             tipo: "ingreso",
             fecha,
@@ -1045,9 +1062,13 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
             cat: "servicios",
             monto: montoTotal,
           })
+          if (error) dbError = error
         }
       }
-    } catch (e) { console.warn("[cobro] clinic_movimientos:", e?.message || e) }
+    } catch (e) { dbError = e }
+    // Si la BD no aceptó el ingreso, NO actualizamos el estado local: mejor que el
+    // usuario vea que faltó registrarlo (y lo reintente) a mostrar una caja falsa.
+    if (dbError) return { ok: false, error: dbError.message || String(dbError) }
   }
 
   setData(d => {
@@ -1086,6 +1107,7 @@ async function registrarIngresoCobroTurno({ setData, clinic, turnoId, fecha, cli
       },
     }
   })
+  return { ok: true }
 }
 
 async function ejecutarCobroTurno({
@@ -1111,16 +1133,20 @@ async function ejecutarCobroTurno({
       alert(eTurno.message || "No se pudo cerrar el cobro.")
       return { ok: false, reason: "turno" }
     }
-    if (alertCobro?.id && typeof alertCobro.id === "number") {
-      await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("id", alertCobro.id)
-    } else {
-      await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("turno_id", turnoId).eq("estado", "pendiente")
-    }
+    // Si la alerta no se marca "cobrado", la campana de recepción la sigue mostrando
+    // pendiente → riesgo de DOBLE COBRO. Capturamos el error y avisamos.
+    const { error: eAlerta } = (alertCobro?.id && typeof alertCobro.id === "number")
+      ? await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("id", alertCobro.id)
+      : await supabase.from("alertas_cobro").update({ estado: "cobrado", metodo_pago: metodo }).eq("turno_id", turnoId).eq("estado", "pendiente")
+    if (eAlerta) alert("Atención: el cobro se cerró pero la alerta no se marcó como cobrada. Verificá en recepción para evitar un doble cobro.\n\n" + (eAlerta.message || ""))
   }
 
-  await registrarIngresoCobroTurno({
+  const ingreso = await registrarIngresoCobroTurno({
     setData, clinic, turnoId, fecha, cliente, montoTotal, montoServicio: ms, montoInsumos: mi, metodo, comprobante: `AUTO-TURNO-${turnoId}`,
   })
+  if (ingreso && ingreso.ok === false) {
+    alert("El turno se cerró, pero el INGRESO no quedó registrado en caja/contabilidad: " + (ingreso.error || "") + "\n\nRegistralo manualmente en TPV para que la caja cuadre.")
+  }
 
   setData(d => ({
     ...d,
@@ -6778,12 +6804,20 @@ function PacientesHistorial({ data, setData, role, nombreUsuario, mode = "pacien
       return
     }
     const label = isClinica ? "paciente" : "cliente"
-    if (!window.confirm(`¿Eliminar la ficha de ${pSel.nombre}? Se borrarán evoluciones y consentimientos vinculados.`)) return
+    // Los consentimientos firmados son documentos legales y NO deben borrarse al
+    // eliminar la ficha (la BD ahora lo impide con ON DELETE RESTRICT). Si los hay,
+    // bloqueamos con un mensaje claro en vez de dejar que reviente la FK.
+    const consentsDelPaciente = (data.consentimientosFirmados || []).filter(c => +c.clienteId === +sel)
+    if (consentsDelPaciente.length) {
+      alert(`Este ${label} tiene ${consentsDelPaciente.length} consentimiento(s) firmado(s) — documentos legales que no se pueden borrar. Para dar de baja la ficha conservando los consentimientos, archivala en vez de eliminarla.`)
+      return
+    }
+    if (!window.confirm(`¿Eliminar la ficha de ${pSel.nombre}? Se borrarán sus evoluciones clínicas.`)) return
     if (!window.confirm(`Confirmación final: NO se puede deshacer. ¿Eliminar ${label} "${pSel.nombre}"?`)) return
     if (import.meta.env.VITE_SUPABASE_URL) {
       const { error } = await supabase.from("clientes").delete().eq("id", sel)
       if (error) {
-        alert(error.message || "No se pudo eliminar la ficha.")
+        alert((error.message || "No se pudo eliminar la ficha.") + "\n\nSi tiene consentimientos o historial vinculado, la base de datos impide el borrado para proteger esos registros.")
         return
       }
     }
@@ -9056,7 +9090,7 @@ async function procesarCobroConOpenAI(texto, servicios) {
   const catalogo = servicios.map(s => ({ id: s.id, nombre: s.nombre, precio: s.precio, cat: s.cat }))
   const res = await fetch("/api/openai/tpv-cobro", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({ texto: texto.trim(), catalogo }),
   })
   const rawText = await res.text()
@@ -9183,7 +9217,7 @@ function diffColor(v) {
 async function procesarSesionDoctorConOpenAI(texto, servicios, stockItems, anamnesisActual) {
   const res = await fetch("/api/openai/doctor-session", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({
       texto: texto.trim(),
       servicios: servicios.map(s => ({ id: s.id, nombre: s.nombre, precio: s.precio, cat: s.cat })),
@@ -9210,7 +9244,7 @@ async function procesarSesionDoctorConOpenAI(texto, servicios, stockItems, anamn
 async function procesarSesionDoctorDesdeAudio(audioBase64, mimeType, servicios, stockItems, anamnesisActual) {
   const res = await fetch("/api/openai/doctor-audio", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({
       audioBase64,
       mimeType: mimeType || "audio/webm",
@@ -9235,7 +9269,7 @@ async function procesarSesionDoctorDesdeAudio(audioBase64, mimeType, servicios, 
 async function procesarResultadoSesionConOpenAI(texto, protocoloSnippet) {
   const res = await fetch("/api/openai/resultado-sesion", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({
       texto: texto.trim(),
       protocolo: String(protocoloSnippet || "").trim(),
@@ -9259,7 +9293,7 @@ async function procesarResultadoSesionConOpenAI(texto, protocoloSnippet) {
 async function procesarResultadoDesdeAudio(audioBase64, mimeType, protocoloSnippet) {
   const res = await fetch("/api/openai/resultado-audio", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({
       audioBase64,
       mimeType: mimeType || "audio/webm",
@@ -9282,7 +9316,7 @@ async function procesarResultadoDesdeAudio(audioBase64, mimeType, protocoloSnipp
 async function procesarInsumoFotoConOpenAI(imageBase64, stockItems, servicios, protocolo) {
   const res = await fetch("/api/openai/insumo-foto", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: await aiAuthHeaders(),
     body: JSON.stringify({
       imageBase64,
       stock: (stockItems || []).map(s => ({ id: s.id, nombre: s.nombre, unidad: s.unidad || "" })),
@@ -9541,7 +9575,7 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
           alert(eTpv.message || "No se pudo registrar la salida en TPV.")
           return
         }
-        await supabase.from("clinic_movimientos").insert({
+        const { error: eMov } = await supabase.from("clinic_movimientos").insert({
           clinic_id: clinic,
           tipo: "egreso",
           fecha: TODAY,
@@ -9549,6 +9583,7 @@ function PuntoVenta({ data, setData, clinic, empleadoId, onPersist }) {
           cat: catContable,
           monto,
         })
+        if (eMov) alert("Salida registrada en caja, pero no se reflejó como egreso en contabilidad: " + (eMov.message || "") + "\nRevisá Contabilidad.")
       }
       setData(d => {
         const tid = d.tpv?.movimientos?.length ? Math.max(...d.tpv.movimientos.map(x => x.id)) + 1 : 1
@@ -12224,7 +12259,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
       }
       const r = await fetch("/api/ocr", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await aiAuthHeaders(),
         body: JSON.stringify({ image_base64: b64 }),
       })
       const j = await r.json().catch(() => null)
@@ -12243,7 +12278,7 @@ function DoctorSessionView({ data, setData, ctx, nombreProfesional, onExit, clin
     try {
       const r = await fetch("/api/openai/face-landmarks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await aiAuthHeaders(),
         body: JSON.stringify({ imageBase64: dataUrl }),
       })
       if (!r.ok) { console.warn("[area-medica] face-landmarks no disponible:", r.status); return }

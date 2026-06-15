@@ -20,6 +20,7 @@
  */
 import express from 'express'
 import cors from 'cors'
+import { createClient } from '@supabase/supabase-js'
 import {
   erpStateSyncPlugin,
   openaiProxiesPlugin,
@@ -102,6 +103,31 @@ function mountPlugin(plugin) {
     plugin.configureServer(fakeServer)
   }
 }
+
+// ─── Auth guard para endpoints de IA/OCR ────────────────────────────
+// Antes, /api/openai/*, /api/ocr, /api/face-analysis y /api/treatment-preview
+// no validaban nada: cualquiera con la URL podía gastar el presupuesto de OpenAI
+// y procesar datos clínicos. Ahora exigen un access_token de Supabase válido.
+const supaAuth = (SUPABASE_URL && SUPABASE_SERVICE_ROLE)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null
+const AI_PROTECTED_PREFIXES = ['/api/openai', '/api/ocr', '/api/face-analysis', '/api/treatment-preview']
+app.use(async (req, res, next) => {
+  if (req.method === 'OPTIONS') return next()
+  const path = req.path || req.url || ''
+  if (!AI_PROTECTED_PREFIXES.some(pre => path.startsWith(pre))) return next()
+  if (!supaAuth) return next() // sin Supabase configurado (dev sin claves): no bloquear
+  const h = req.headers.authorization || ''
+  const token = h.startsWith('Bearer ') ? h.slice(7).trim() : ''
+  if (!token) return res.status(401).json({ error: 'Falta autenticación (token)' })
+  try {
+    const { data, error } = await supaAuth.auth.getUser(token)
+    if (error || !data?.user) return res.status(401).json({ error: 'Sesión inválida o expirada' })
+    return next()
+  } catch {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+})
 
 // ─── Montaje de plugins ─────────────────────────────────────────────
 mountPlugin(erpStateSyncPlugin())
