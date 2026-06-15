@@ -8009,9 +8009,23 @@ function PersonalTurnos({ data, setData, role, clinic }) {
     patchEmp(id, patcher)
     setSelEmp(prev => (prev && prev.id === id ? patcher(prev) : prev))
   }
+  const [savingFicha, setSavingFicha] = useState(false)
   const saveFichaEmp = async () => {
-    if (!selEmp || !import.meta.env.VITE_SUPABASE_URL) return
+    if (!selEmp) return
+    const nombre = String(selEmp.nombre || "").trim()
+    if (!nombre) { alert("El nombre no puede quedar vacío."); return }
+    if (!import.meta.env.VITE_SUPABASE_URL) { setOpenFicha(false); return }
     const payload = {
+      // Datos principales (antes NO se guardaban desde la ficha)
+      nombre,
+      rol: String(selEmp.cargo || "recepcionista"),
+      email: String(selEmp.email || "").trim(),
+      tel: String(selEmp.tel || "").trim(),
+      activo: selEmp.activo !== false,
+      especialidad: String(selEmp.especialidad || "").trim(),
+      comision_pct: Math.max(0, Math.min(100, +selEmp.comision || 0)),
+      color: selEmp.color || C.violet,
+      // Ficha extendida
       foto_url: String(selEmp.fotoUrl || ""),
       documento: String(selEmp.documento || ""),
       fecha_nacimiento: selEmp.fechaNacimiento || null,
@@ -8022,12 +8036,17 @@ function PersonalTurnos({ data, setData, role, clinic }) {
       notas: String(selEmp.notas || ""),
       historial: Array.isArray(selEmp.historial) ? selEmp.historial : [],
     }
-    const { error } = await supabase.from("empleados").update(payload).eq("id", selEmp.id)
-    if (error) {
-      alert(error.message || "No se pudo guardar la ficha del empleado.")
-      return
+    setSavingFicha(true)
+    try {
+      const { error } = await supabase.from("empleados").update(payload).eq("id", selEmp.id)
+      if (error) {
+        alert(error.message || "No se pudo guardar la ficha del empleado.")
+        return
+      }
+      setOpenFicha(false)
+    } finally {
+      setSavingFicha(false)
     }
-    alert("Ficha de empleado guardada.")
   }
   const addEmpHist = () => {
     if (!selEmp || !histForm.titulo.trim()) return
@@ -8329,13 +8348,59 @@ function PersonalTurnos({ data, setData, role, clinic }) {
           <FG label="Salida"><input type="time" style={inp} value={formT.salida} onChange={e=>ut("salida",e.target.value)}/></FG>
         </div>
       </Modal>
-      <Modal open={openFicha} onClose={()=>setOpenFicha(false)} title={selEmp ? `Ficha empleado · ${selEmp.nombre}` : "Ficha empleado"}
+      <Modal open={openFicha} onClose={()=>{ if(!savingFicha) setOpenFicha(false) }} title={selEmp ? `Ficha de ${selEmp.nombre}` : "Ficha empleado"}
         footer={<>
-          {!readOnly && <Btn onClick={() => void saveFichaEmp()}>Guardar cambios</Btn>}
-          <Btn variant="outline" onClick={()=>setOpenFicha(false)}>Cerrar</Btn>
+          {!readOnly && <Btn onClick={() => void saveFichaEmp()} disabled={savingFicha}>{savingFicha ? "Guardando…" : "Guardar cambios"}</Btn>}
+          <Btn variant="outline" disabled={savingFicha} onClick={()=>setOpenFicha(false)}>Cerrar</Btn>
         </>}>
         {selEmp && (
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+
+            {/* Cabecera: avatar + nombre + estado */}
+            <div style={{ display:"flex", alignItems:"center", gap:14, padding:"4px 2px" }}>
+              <img src={empPhotoSrc(selEmp)} alt="" style={{ width:64, height:64, borderRadius:"50%", objectFit:"cover", border:`2px solid ${selEmp.color || C.violet}`, flexShrink:0 }}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:16, fontWeight:800, color:C.text }}>{selEmp.nombre || "Sin nombre"}</div>
+                <div style={{ fontSize:12.5, color:C.muted }}>{ROLE_LABEL[selEmp.cargo] || selEmp.cargo}{String(selEmp.especialidad||"").trim() ? ` · ${selEmp.especialidad}` : ""}</div>
+              </div>
+              {!readOnly && (
+                <button type="button" onClick={()=>syncSelEmp(selEmp.id, x => ({ ...x, activo: !(x.activo !== false) }))}
+                  style={{ border:`1px solid ${selEmp.activo!==false ? "#A7F3D0" : "#FECACA"}`, background: selEmp.activo!==false ? "rgba(240,253,244,.9)" : "rgba(254,242,242,.9)", color: selEmp.activo!==false ? "#047857" : "#B91C1C", borderRadius:999, padding:"6px 14px", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
+                  {selEmp.activo!==false ? "● Activo" : "○ De baja"}
+                </button>
+              )}
+            </div>
+
+            {/* Datos principales — editables */}
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Datos principales</div>
+              <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap:14 }}>
+                <FG label="Nombre" full><input style={inp} readOnly={readOnly} value={selEmp.nombre||""} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, nombre:e.target.value }))}/></FG>
+                <FG label="Rol en clínica">
+                  <select style={inp} disabled={readOnly} value={selEmp.cargo||"recepcionista"} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, cargo:e.target.value }))}>
+                    <option value="recepcionista">Recepcionista</option>
+                    <option value="especialista">Especialista</option>
+                    <option value="encargado">Encargado/a</option>
+                    <option value="gerente">Gerente</option>
+                  </select>
+                </FG>
+                <FG label="Especialidad"><input style={inp} readOnly={readOnly} value={selEmp.especialidad||""} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, especialidad:e.target.value }))} placeholder="Ej: medicina estética, láser…"/></FG>
+                <FG label="Email"><input style={inp} readOnly={readOnly} value={selEmp.email||""} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, email:e.target.value }))} placeholder="correo@bettystetik.com"/></FG>
+                <FG label="Teléfono"><input style={inp} readOnly={readOnly} value={selEmp.tel||""} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, tel:e.target.value }))}/></FG>
+                <FG label="Comisión (%)"><input type="number" min="0" max="100" style={inp} readOnly={readOnly} value={selEmp.comision ?? ""} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, comision:e.target.value }))}/></FG>
+                <FG label="Color en agenda">
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <input type="color" disabled={readOnly} value={selEmp.color || "#6366F1"} onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, color:e.target.value }))} style={{ width:48, height:36, border:`1px solid ${C.border}`, borderRadius:8, padding:2, background:"#fff", cursor:"pointer" }}/>
+                    <span style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{selEmp.color || "#6366F1"}</span>
+                  </div>
+                </FG>
+              </div>
+            </div>
+
+            {/* Foto y ficha extendida */}
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>Foto y datos personales</div>
+              <div style={{ display:"grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap:14 }}>
             <FG label="Foto">
               <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
                 <img src={empPhotoSrc(selEmp)} alt="" style={{ width:80, height:80, objectFit:"cover", borderRadius:10, border:`1px solid ${C.border}` }}/>
@@ -8406,6 +8471,8 @@ function PersonalTurnos({ data, setData, role, clinic }) {
                 )}
               </div>
             </FG>
+              </div>
+            </div>
           </div>
         )}
       </Modal>
