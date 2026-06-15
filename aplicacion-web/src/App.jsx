@@ -7751,11 +7751,13 @@ function PersonalTurnos({ data, setData, role, clinic }) {
   const [tab, setTab] = useState("empleados")
   const [openE, setOpenE] = useState(false)
   const [openT, setOpenT] = useState(false)
+  const [editTId, setEditTId] = useState(null) // id de franja en edición (null = asignar nueva)
+  const [savingT, setSavingT] = useState(false)
   const [openFicha, setOpenFicha] = useState(false)
   const [selEmp, setSelEmp] = useState(null)
   const [histForm, setHistForm] = useState({ titulo:"", detalle:"" })
   const [formE, setFormE] = useState({ nombre:"", cargo:"recepcionista", tel:"", email:"", activo:true, especialidad:"", comision:"", color:"#6366F1" })
-  const [formT, setFormT] = useState({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
+  const [formT, setFormT] = useState({ empleadoId:"", dias:[1,2,3,4,5], entrada:"09:00", salida:"18:00" })
   const [empCamOpen, setEmpCamOpen] = useState(false)
   const [empCamErr, setEmpCamErr] = useState("")
   const empCamVideoRef = useRef(null)
@@ -7946,51 +7948,79 @@ function PersonalTurnos({ data, setData, role, clinic }) {
     }
     setData(d => ({ ...d, empleados: d.empleados.filter(e => e.id !== id), turnosLaborales: d.turnosLaborales.filter(t => t.empleadoId !== id) }))
   }
+  const abrirAsignarTurno = (empId = "") => {
+    setEditTId(null)
+    setFormT({ empleadoId: empId ? String(empId) : "", dias: [1, 2, 3, 4, 5], entrada: "09:00", salida: "18:00" })
+    setOpenT(true)
+  }
+  const abrirEditarFranja = fr => {
+    setEditTId(fr.id)
+    setFormT({ empleadoId: String(fr.empleadoId), dias: [fr.diaSemana], entrada: String(fr.entrada || "").slice(0, 5), salida: String(fr.salida || "").slice(0, 5) })
+    setOpenT(true)
+  }
+  const toggleDiaT = d => setFormT(f => {
+    const set = new Set(f.dias || [])
+    if (set.has(d)) set.delete(d); else set.add(d)
+    return { ...f, dias: [...set] }
+  })
   const saveT = async () => {
-    if (!formT.empleadoId) return
+    if (!formT.empleadoId) { alert("Elegí un empleado."); return }
     if (!formT.entrada || !formT.salida || formT.entrada >= formT.salida) {
       alert("Horario inválido: la entrada debe ser anterior a la salida.")
       return
     }
+    const dias = (formT.dias || []).map(Number)
+    if (!dias.length) { alert("Elegí al menos un día."); return }
     const emp = data.empleados.find(e => +e.id === +formT.empleadoId)
     const clinicId = emp?.clinicId || clinic || 1
-    if (import.meta.env.VITE_SUPABASE_URL) {
-      const { data: ins, error } = await supabase
-        .from("agenda_disponibilidad")
-        .insert({
-          clinic_id: clinicId,
-          empleado_id: +formT.empleadoId,
-          dia_semana: +formT.diaSemana,
-          hora_desde: formT.entrada,
-          hora_hasta: formT.salida,
-          activo: true,
-        })
-        .select("id, clinic_id, empleado_id, dia_semana, hora_desde, hora_hasta, nota")
-        .single()
-      if (error) {
-        alert(error.message || "No se pudo guardar la franja horaria.")
+    setSavingT(true)
+    try {
+      // ── EDICIÓN de una franja existente ──
+      if (editTId != null) {
+        const dia = dias[0]
+        if (import.meta.env.VITE_SUPABASE_URL) {
+          const { error } = await supabase.from("agenda_disponibilidad")
+            .update({ dia_semana: dia, hora_desde: formT.entrada, hora_hasta: formT.salida })
+            .eq("id", editTId)
+          if (error) { alert(error.message || "No se pudo actualizar la franja."); return }
+        }
+        setData(d => ({
+          ...d,
+          turnosLaborales: (d.turnosLaborales || []).map(t => t.id === editTId
+            ? { ...t, diaSemana: dia, entrada: formT.entrada, salida: formT.salida } : t),
+        }))
+        setOpenT(false); setEditTId(null)
         return
       }
-      setData(d => ({
-        ...d,
-        turnosLaborales: [...d.turnosLaborales, {
-          id: ins.id,
-          clinicId: ins.clinic_id,
-          empleadoId: ins.empleado_id,
-          diaSemana: ins.dia_semana,
-          entrada: ins.hora_desde || formT.entrada,
-          salida: ins.hora_hasta || formT.salida,
-          nota: ins.nota || "",
-        }],
-      }))
+      // ── ALTA: una franja por cada día seleccionado (evita duplicar idénticas) ──
+      const yaExiste = (empId, dia) => (data.turnosLaborales || []).some(t =>
+        +t.empleadoId === +empId && +t.diaSemana === dia && t.entrada === formT.entrada && t.salida === formT.salida)
+      const diasNuevos = dias.filter(dia => !yaExiste(formT.empleadoId, dia))
+      if (!diasNuevos.length) { alert("Esas franjas ya existen para este empleado."); setOpenT(false); return }
+      if (import.meta.env.VITE_SUPABASE_URL) {
+        const rows = diasNuevos.map(dia => ({
+          clinic_id: clinicId, empleado_id: +formT.empleadoId, dia_semana: dia,
+          hora_desde: formT.entrada, hora_hasta: formT.salida, activo: true,
+        }))
+        const { data: ins, error } = await supabase.from("agenda_disponibilidad").insert(rows)
+          .select("id, clinic_id, empleado_id, dia_semana, hora_desde, hora_hasta, nota")
+        if (error) { alert(error.message || "No se pudieron guardar las franjas."); return }
+        setData(d => ({
+          ...d,
+          turnosLaborales: [...d.turnosLaborales, ...(ins || []).map(r => ({
+            id: r.id, clinicId: r.clinic_id, empleadoId: r.empleado_id, diaSemana: r.dia_semana,
+            entrada: r.hora_desde, salida: r.hora_hasta, nota: r.nota || "",
+          }))],
+        }))
+      } else {
+        let nid = data.turnosLaborales.length ? Math.max(...data.turnosLaborales.map(t => t.id)) + 1 : 1
+        const nuevas = diasNuevos.map(dia => ({ id: nid++, clinicId, empleadoId: +formT.empleadoId, diaSemana: dia, entrada: formT.entrada, salida: formT.salida }))
+        setData(d => ({ ...d, turnosLaborales: [...d.turnosLaborales, ...nuevas] }))
+      }
       setOpenT(false)
-      setFormT({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
-      return
+    } finally {
+      setSavingT(false)
     }
-    const id = data.turnosLaborales.length ? Math.max(...data.turnosLaborales.map(t => t.id)) + 1 : 1
-    setData(d => ({ ...d, turnosLaborales: [...d.turnosLaborales, { ...formT, clinicId, empleadoId:+formT.empleadoId, id, diaSemana:+formT.diaSemana }] }))
-    setOpenT(false)
-    setFormT({ empleadoId:"", diaSemana:1, entrada:"09:00", salida:"18:00" })
   }
   const delT = async id => {
     if (!window.confirm("¿Quitar esta franja horaria?")) return
@@ -8276,10 +8306,11 @@ function PersonalTurnos({ data, setData, role, clinic }) {
 
       {tab==="turnos" && (
         <div style={{ background:C.card, borderRadius:16, padding:22, boxShadow:"0 1px 3px rgba(0,0,0,.06)" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:16 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:10, flexWrap:"wrap" }}>
             <span style={{ fontSize:14, fontWeight:700 }}>Franjas por empleado</span>
-            {!readOnly && <Btn onClick={()=>setOpenT(true)}><Plus size={14}/> Asignar turno</Btn>}
+            {!readOnly && <Btn onClick={()=>abrirAsignarTurno()}><Plus size={14}/> Asignar horario</Btn>}
           </div>
+          {!readOnly && <p style={{ fontSize:12, color:C.muted, margin:"0 0 14px" }}>Tocá una franja para editarla, o usá «Asignar horario» para varios días a la vez. El horario define la disponibilidad del especialista en la agenda.</p>}
           {data.empleados.map(e => {
             const hs = horasSemana(e.id)
             return (
@@ -8288,16 +8319,23 @@ function PersonalTurnos({ data, setData, role, clinic }) {
                 <img src={empPhotoSrc(e)} alt="" style={{ width:30, height:30, borderRadius:"50%", objectFit:"cover", border:`2px solid ${e.color || C.violet}` }}/>
                 <span style={{ fontWeight:700, fontSize:13.5 }}>{e.nombre}</span>
                 <span style={{ fontSize:11.5, color:C.muted }}>{ROLE_LABEL[e.cargo] || e.cargo}</span>
-                {hs > 0 && <span style={{ marginLeft:"auto", fontSize:11.5, fontWeight:700, color:C.violetDark, background:"rgba(238,242,255,.9)", border:"1px solid rgba(199,210,254,.7)", borderRadius:8, padding:"3px 9px", fontVariantNumeric:"tabular-nums" }}>{Math.round(hs * 10) / 10} h/semana</span>}
+                {hs > 0 && <span style={{ fontSize:11.5, fontWeight:700, color:C.violetDark, background:"rgba(238,242,255,.9)", border:"1px solid rgba(199,210,254,.7)", borderRadius:8, padding:"3px 9px", fontVariantNumeric:"tabular-nums" }}>{Math.round(hs * 10) / 10} h/semana</span>}
+                {!readOnly && <button type="button" onClick={()=>abrirAsignarTurno(e.id)} title="Asignar horario a este empleado" style={{ marginLeft:"auto", border:`1px solid ${C.border}`, background:C.card, borderRadius:8, padding:"4px 10px", fontSize:11.5, fontWeight:700, color:C.violet, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:4 }}><Plus size={12}/> Horario</button>}
               </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                 {[1,2,3,4,5,6,0].map(dia => {
                   const franjas = (byEmp[e.id] || []).filter(t => +t.diaSemana === dia).sort((a,b)=>String(a.entrada).localeCompare(String(b.entrada)))
                   if (!franjas.length) return null
                   return franjas.map(t => (
-                    <span key={t.id} style={{ background:"rgba(238,242,255,.7)", border:"1px solid rgba(199,210,254,.6)", padding:"6px 12px", borderRadius:8, fontSize:12, display:"inline-flex", alignItems:"center", gap:8, fontWeight:600, color:C.violetDark }}>
-                      {DIA_SEMANA[t.diaSemana]} · {t.entrada}–{t.salida}
-                      {!readOnly && <button type="button" onClick={()=>delT(t.id)} style={{ border:"none", background:"transparent", cursor:"pointer", color:C.danger, padding:0, display:"flex" }}><X size={12}/></button>}
+                    <span key={t.id} style={{ background:"rgba(238,242,255,.7)", border:"1px solid rgba(199,210,254,.6)", padding:"6px 6px 6px 12px", borderRadius:8, fontSize:12, display:"inline-flex", alignItems:"center", gap:6, fontWeight:600, color:C.violetDark }}>
+                      {readOnly ? (
+                        <span>{DIA_SEMANA[t.diaSemana]} · {String(t.entrada).slice(0,5)}–{String(t.salida).slice(0,5)}</span>
+                      ) : (
+                        <button type="button" onClick={()=>abrirEditarFranja(t)} title="Editar franja" style={{ border:"none", background:"transparent", cursor:"pointer", color:C.violetDark, padding:0, font:"inherit", fontWeight:600 }}>
+                          {DIA_SEMANA[t.diaSemana]} · {String(t.entrada).slice(0,5)}–{String(t.salida).slice(0,5)}
+                        </button>
+                      )}
+                      {!readOnly && <button type="button" onClick={()=>delT(t.id)} title="Quitar" style={{ border:"none", background:"transparent", cursor:"pointer", color:C.danger, padding:"0 2px", display:"flex" }}><X size={12}/></button>}
                     </span>
                   ))
                 })}
@@ -8330,22 +8368,49 @@ function PersonalTurnos({ data, setData, role, clinic }) {
         </div>
       </Modal>
 
-      <Modal open={openT} onClose={()=>setOpenT(false)} title="Turno laboral"
-        footer={<><Btn variant="outline" onClick={()=>setOpenT(false)}>Cancelar</Btn><Btn onClick={() => void saveT()}>Guardar</Btn></>}>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+      <Modal open={openT} onClose={()=>{ if(!savingT){ setOpenT(false); setEditTId(null) } }} title={editTId != null ? "Editar franja horaria" : "Asignar horario de trabajo"}
+        footer={<><Btn variant="outline" disabled={savingT} onClick={()=>{ setOpenT(false); setEditTId(null) }}>Cancelar</Btn><Btn disabled={savingT} onClick={() => void saveT()}>{savingT ? "Guardando…" : (editTId != null ? "Guardar cambios" : "Asignar")}</Btn></>}>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
           <FG label="Empleado" full>
-            <select style={inp} value={formT.empleadoId} onChange={e=>ut("empleadoId",e.target.value)}>
+            <select style={inp} disabled={editTId != null} value={formT.empleadoId} onChange={e=>ut("empleadoId",e.target.value)}>
               <option value="">Seleccionar…</option>
-              {data.empleados.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+              {data.empleados.map(e => <option key={e.id} value={e.id}>{e.nombre} — {ROLE_LABEL[e.cargo] || e.cargo}</option>)}
             </select>
           </FG>
-          <FG label="Día">
-            <select style={inp} value={formT.diaSemana} onChange={e=>ut("diaSemana",e.target.value)}>
-              {[1,2,3,4,5,6,0].map(d => <option key={d} value={d}>{DIA_SEMANA[d]}</option>)}
-            </select>
-          </FG>
-          <FG label="Entrada"><input type="time" style={inp} value={formT.entrada} onChange={e=>ut("entrada",e.target.value)}/></FG>
-          <FG label="Salida"><input type="time" style={inp} value={formT.salida} onChange={e=>ut("salida",e.target.value)}/></FG>
+          <div>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap" }}>
+              <label style={{ fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:"0.05em" }}>{editTId != null ? "Día" : "Días"}</label>
+              {editTId == null && (
+                <div style={{ display:"flex", gap:6 }}>
+                  <button type="button" onClick={()=>setFormT(f=>({ ...f, dias:[1,2,3,4,5] }))} style={{ fontSize:11, fontWeight:700, color:C.violet, background:C.violetLight, border:`1px solid ${C.border}`, borderRadius:6, padding:"3px 8px", cursor:"pointer" }}>Lun–Vie</button>
+                  <button type="button" onClick={()=>setFormT(f=>({ ...f, dias:[1,2,3,4,5,6,0] }))} style={{ fontSize:11, fontWeight:700, color:C.violet, background:C.violetLight, border:`1px solid ${C.border}`, borderRadius:6, padding:"3px 8px", cursor:"pointer" }}>Todos</button>
+                </div>
+              )}
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {[1,2,3,4,5,6,0].map(d => {
+                const sel = (formT.dias || []).includes(d)
+                return (
+                  <button key={d} type="button"
+                    onClick={()=> editTId != null ? setFormT(f=>({ ...f, dias:[d] })) : toggleDiaT(d)}
+                    style={{ minWidth:48, padding:"8px 10px", borderRadius:8, fontSize:12.5, fontWeight:700, cursor:"pointer",
+                      border:`1px solid ${sel ? C.violet : C.border}`, background: sel ? C.violet : C.card, color: sel ? "#fff" : C.muted }}>
+                    {DIA_SEMANA[d]}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+            <FG label="Entrada"><input type="time" style={inp} value={formT.entrada} onChange={e=>ut("entrada",e.target.value)}/></FG>
+            <FG label="Salida"><input type="time" style={inp} value={formT.salida} onChange={e=>ut("salida",e.target.value)}/></FG>
+          </div>
+          {editTId == null && (formT.dias || []).length > 0 && formT.entrada < formT.salida && (
+            <div style={{ fontSize:12, color:C.muted, background:C.subtle, borderRadius:8, padding:"8px 12px" }}>
+              Se crean <strong>{(formT.dias || []).length}</strong> franja(s) de <strong>{formT.entrada}–{formT.salida}</strong> ·
+              {" "}{(formT.dias || []).slice().sort((a,b)=>(a===0?7:a)-(b===0?7:b)).map(d=>DIA_SEMANA[d]).join(", ")}
+            </div>
+          )}
         </div>
       </Modal>
       <Modal open={openFicha} onClose={()=>{ if(!savingFicha) setOpenFicha(false) }} title={selEmp ? `Ficha de ${selEmp.nombre}` : "Ficha empleado"}
