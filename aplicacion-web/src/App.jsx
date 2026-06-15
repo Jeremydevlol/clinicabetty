@@ -8056,7 +8056,14 @@ function PersonalTurnos({ data, setData, role, clinic }) {
     setData(d => ({ ...d, turnosLaborales: d.turnosLaborales.filter(t => t.id !== id) }))
   }
   const patchEmp = (id, patcher) => setData(d => ({ ...d, empleados: d.empleados.map(e => e.id === id ? patcher(e) : e) }))
-  const openFichaEmp = e => { setSelEmp(e); setOpenFicha(true) }
+  const openFichaEmp = e => {
+    setSelEmp(e); setOpenFicha(true)
+    // El PIN de fichaje no viaja en el bootstrap (privado); se carga al abrir la ficha.
+    if (import.meta.env.VITE_SUPABASE_URL) {
+      supabase.from("empleados").select("pin").eq("id", e.id).maybeSingle()
+        .then(({ data: row }) => { if (row) syncSelEmp(e.id, x => ({ ...x, pin: row.pin || "" })) })
+    }
+  }
   const syncSelEmp = (id, patcher) => {
     patchEmp(id, patcher)
     setSelEmp(prev => (prev && prev.id === id ? patcher(prev) : prev))
@@ -8077,6 +8084,7 @@ function PersonalTurnos({ data, setData, role, clinic }) {
       especialidad: String(selEmp.especialidad || "").trim(),
       comision_pct: Math.max(0, Math.min(100, +selEmp.comision || 0)),
       color: selEmp.color || C.violet,
+      pin: String(selEmp.pin || "").trim() || null,
       // Ficha extendida
       foto_url: String(selEmp.fotoUrl || ""),
       documento: String(selEmp.documento || ""),
@@ -8481,6 +8489,13 @@ function PersonalTurnos({ data, setData, role, clinic }) {
                     <span style={{ fontSize:12, color:C.muted, fontFamily:"monospace" }}>{selEmp.color || "#6366F1"}</span>
                   </div>
                 </FG>
+                <FG label="PIN de fichaje (4–8 dígitos)">
+                  <input style={inp} readOnly={readOnly} inputMode="numeric" maxLength={8}
+                    value={selEmp.pin || ""}
+                    onChange={e=>syncSelEmp(selEmp.id, x => ({ ...x, pin: e.target.value.replace(/\D/g, "").slice(0,8) }))}
+                    placeholder="Ej: 1234"/>
+                  <span style={{ fontSize:11, color:C.muted, marginTop:4, display:"block" }}>Para fichar en el iPad de recepción (ruta /fichar). Único por clínica.</span>
+                </FG>
               </div>
             </div>
 
@@ -8567,6 +8582,163 @@ function PersonalTurnos({ data, setData, role, clinic }) {
   )
 }
 
+// ─── KIOSKO DE FICHAJE (ruta /fichar, iPad de recepción, sin login) ──────────
+function KioskFichaje() {
+  const [clinics, setClinics] = useState([])
+  const [clinicId, setClinicId] = useState(() => {
+    if (typeof window === "undefined") return null
+    const q = new URLSearchParams(window.location.search).get("clinic")
+    if (q && /^\d+$/.test(q)) return +q
+    const saved = window.localStorage.getItem("kioskClinicId")
+    return saved && /^\d+$/.test(saved) ? +saved : null
+  })
+  const [pin, setPin] = useState("")
+  const [step, setStep] = useState("pin") // pin | empleado | done
+  const [empleado, setEmpleado] = useState(null)
+  const [fichaje, setFichaje] = useState(null)
+  const [error, setError] = useState("")
+  const [okMsg, setOkMsg] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [reloj, setReloj] = useState(() => new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }))
+
+  useEffect(() => {
+    const iv = setInterval(() => setReloj(new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })), 15000)
+    return () => clearInterval(iv)
+  }, [])
+  useEffect(() => {
+    fetch("/api/erp/fichar/clinicas").then(r => r.json()).then(j => setClinics(j.clinics || [])).catch(() => {})
+  }, [])
+
+  const elegirClinic = id => { setClinicId(id); try { window.localStorage.setItem("kioskClinicId", String(id)) } catch { /* */ } }
+  const clinicNombre = (clinics.find(c => +c.id === +clinicId)?.nombre) || (clinicId ? `Clínica ${clinicId}` : "")
+
+  const volverAPin = () => { setStep("pin"); setPin(""); setEmpleado(null); setFichaje(null); setError(""); setOkMsg("") }
+
+  const buscar = async () => {
+    if (pin.length < 4) return
+    setBusy(true); setError("")
+    try {
+      const r = await fetch("/api/erp/fichar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin, clinicId }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) { setError(j.error || "PIN no reconocido."); setPin(""); return }
+      setEmpleado(j.empleado); setFichaje(j.fichaje); setStep("empleado")
+    } finally { setBusy(false) }
+  }
+
+  const marcar = async (campo, etiqueta) => {
+    setBusy(true); setError("")
+    try {
+      const r = await fetch("/api/erp/fichar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin, clinicId, campo }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) { setError(j.error || "No se pudo fichar."); return }
+      setFichaje(j.fichaje)
+      setOkMsg(`${etiqueta} registrada · ${new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}`)
+      setStep("done")
+      setTimeout(volverAPin, 3500)
+    } finally { setBusy(false) }
+  }
+
+  const wrap = { minHeight: "100dvh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24, padding: 24, background: "linear-gradient(160deg,#EEF2FF 0%,#F8FAFC 55%,#FDF4FF 100%)", fontFamily: "'Inter','Segoe UI',system-ui,sans-serif" }
+  const cardK = { background: "#fff", borderRadius: 24, padding: 32, width: "100%", maxWidth: 460, boxShadow: "0 20px 60px -20px rgba(15,23,42,.25)" }
+
+  // Selección de clínica (primera vez en el iPad)
+  if (!clinicId) {
+    return (
+      <div style={wrap}>
+        <div style={cardK}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}><Clock size={24} color={C.violet} /><h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Fichaje del personal</h1></div>
+          <p style={{ fontSize: 14, color: C.muted, marginBottom: 20 }}>Elegí la clínica de este dispositivo (se recuerda en el iPad).</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {(clinics.length ? clinics : [{ id: 1, nombre: "Clínica 1" }, { id: 2, nombre: "Clínica 2" }, { id: 3, nombre: "Clínica 3" }]).map(c => (
+              <button key={c.id} type="button" onClick={() => elegirClinic(c.id)} style={{ padding: "16px", borderRadius: 14, border: `1.5px solid ${C.border}`, background: C.card, fontSize: 16, fontWeight: 700, color: C.text, cursor: "pointer" }}>{c.nombre}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Confirmación tras fichar
+  if (step === "done") {
+    return (
+      <div style={wrap}>
+        <div style={{ ...cardK, textAlign: "center" }}>
+          <div style={{ width: 72, height: 72, borderRadius: "50%", background: "rgba(16,185,129,.12)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><CheckCircle2 size={40} color="#10B981" /></div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{empleado?.nombre?.split(" ")[0] || ""}</div>
+          <div style={{ fontSize: 15, color: C.muted, marginTop: 6 }}>{okMsg}</div>
+          <Btn onClick={volverAPin} style={{ marginTop: 22, width: "100%", justifyContent: "center", minHeight: 48 }}>Listo</Btn>
+        </div>
+      </div>
+    )
+  }
+
+  // Datos + jornada del empleado identificado
+  if (step === "empleado" && empleado) {
+    const f = fichaje
+    const estado = !f || !f.entrada_at ? "sin_iniciar" : f.salida_at ? "finalizada" : (f.almuerzo_inicio_at && !f.almuerzo_fin_at) ? "almuerzo" : "trabajando"
+    return (
+      <div style={wrap}>
+        <div style={cardK}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+            <div style={{ width: 56, height: 56, borderRadius: "50%", flexShrink: 0, background: empleado.fotoUrl ? `center/cover url(${empleado.fotoUrl})` : `linear-gradient(135deg,${empleado.color || C.violet},${empleado.color || C.violet}99)`, color: "#fff", fontWeight: 800, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {!empleado.fotoUrl && (empleado.nombre || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{empleado.nombre}</div>
+              <div style={{ fontSize: 13, color: C.muted }}>{clinicNombre} · {reloj}</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, textAlign: "center", marginBottom: 18 }}>
+            {[["Entrada", f?.entrada_at], ["Almuerzo", f?.almuerzo_inicio_at], ["Vuelta", f?.almuerzo_fin_at], ["Salida", f?.salida_at]].map(([l, v]) => (
+              <div key={l} style={{ background: C.subtle, borderRadius: 10, padding: "10px 4px" }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: v ? C.text : "#CBD5E1", fontVariantNumeric: "tabular-nums" }}>{v ? new Date(v).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—"}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, marginTop: 2, textTransform: "uppercase" }}>{l}</div>
+              </div>
+            ))}
+          </div>
+          {error && <div style={{ fontSize: 13, color: C.danger, marginBottom: 12, textAlign: "center" }}>{error}</div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {estado === "sin_iniciar" && <Btn onClick={() => void marcar("entrada_at", "Entrada")} disabled={busy} style={{ justifyContent: "center", minHeight: 56, fontSize: 16 }}><Clock size={18} /> Fichar entrada</Btn>}
+            {estado === "trabajando" && !f?.almuerzo_inicio_at && <Btn variant="outline" onClick={() => void marcar("almuerzo_inicio_at", "Salida a almuerzo")} disabled={busy} style={{ justifyContent: "center", minHeight: 52, fontSize: 15 }}>Iniciar almuerzo</Btn>}
+            {estado === "almuerzo" && <Btn variant="outline" onClick={() => void marcar("almuerzo_fin_at", "Vuelta de almuerzo")} disabled={busy} style={{ justifyContent: "center", minHeight: 52, fontSize: 15 }}>Terminar almuerzo</Btn>}
+            {estado === "trabajando" && <Btn onClick={() => void marcar("salida_at", "Salida")} disabled={busy} style={{ justifyContent: "center", minHeight: 56, fontSize: 16, background: C.danger }}>Fichar salida</Btn>}
+            {estado === "finalizada" && <div style={{ textAlign: "center", fontSize: 15, fontWeight: 700, color: C.violetDark, padding: "10px 0" }}>Jornada ya completada hoy ✓</div>}
+          </div>
+          <button type="button" onClick={volverAPin} style={{ marginTop: 16, width: "100%", border: "none", background: "none", color: C.muted, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancelar</button>
+        </div>
+      </div>
+    )
+  }
+
+  // Teclado de PIN
+  return (
+    <div style={wrap}>
+      <div style={cardK}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><Clock size={22} color={C.violet} /><h1 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Fichaje</h1></div>
+          <button type="button" onClick={() => { setClinicId(null); try { window.localStorage.removeItem("kioskClinicId") } catch { /* */ } }} style={{ border: "none", background: "none", color: C.muted, fontSize: 12, cursor: "pointer" }}>{clinicNombre} ▾</button>
+        </div>
+        <p style={{ fontSize: 13.5, color: C.muted, marginBottom: 18 }}>Ingresá tu PIN para fichar.</p>
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 18 }}>
+          {[0, 1, 2, 3, 4, 5, 6, 7].slice(0, Math.max(4, pin.length || 4)).map((_, i) => (
+            <span key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: i < pin.length ? C.violet : "#E2E8F0" }} />
+          ))}
+        </div>
+        {error && <div style={{ fontSize: 13, color: C.danger, marginBottom: 12, textAlign: "center" }}>{error}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"].map(k => (
+            <button key={k} type="button" disabled={busy}
+              onClick={() => { setError(""); if (k === "C") setPin(""); else if (k === "⌫") setPin(p => p.slice(0, -1)); else setPin(p => (p.length < 8 ? p + k : p)) }}
+              style={{ padding: "18px 0", borderRadius: 14, border: `1px solid ${C.border}`, background: k === "C" || k === "⌫" ? C.subtle : "#fff", fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer" }}>{k}</button>
+          ))}
+        </div>
+        <Btn onClick={() => void buscar()} disabled={busy || pin.length < 4} style={{ marginTop: 16, width: "100%", justifyContent: "center", minHeight: 52, fontSize: 16 }}>{busy ? "Verificando…" : "Fichar"}</Btn>
+      </div>
+      <div style={{ fontSize: 12, color: C.muted }}>Cada empleado ficha con su PIN · administración asigna los PIN en cada ficha.</div>
+    </div>
+  )
+}
+
 // ─── SECTION: CONTROL HORARIO / RRHH ─────────────────────────
 const AUSENCIA_TIPOS = { vacaciones: "Vacaciones", enfermedad: "Baja médica", permiso: "Permiso", falta: "Falta", otro: "Otro" }
 function horasDeFichaje(f) {
@@ -8598,7 +8770,8 @@ function ControlHorario({ data, clinic, role, sessionEmail }) {
     () => (data.empleados || []).filter(e => +e.clinicId === +clinic),
     [data.empleados, clinic],
   )
-  const [tab, setTab] = useState("jornada")
+  // El fichaje vive en el kiosko /fichar (iPad), no en el perfil. Acá: asistencia, ausencias y rendimiento.
+  const [tab, setTab] = useState(esAdmin ? "asistencia" : "ausencias")
   const [miFichaje, setMiFichaje] = useState(null)
   const [fichajes, setFichajes] = useState([])      // de la clínica (admin)
   const [ausencias, setAusencias] = useState([])
@@ -8727,7 +8900,7 @@ function ControlHorario({ data, clinic, role, sessionEmail }) {
   void tick // releer reloj
 
   const card = { background: C.card, borderRadius: 16, padding: 22, boxShadow: "0 1px 3px rgba(0,0,0,.06)" }
-  const tabs = [{ id: "jornada", label: "Mi jornada" }]
+  const tabs = []
   if (esAdmin) tabs.push({ id: "asistencia", label: "Asistencia" })
   tabs.push({ id: "ausencias", label: esAdmin ? `Ausencias (${ausencias.filter(a => a.estado === "pendiente").length})` : "Mis ausencias" })
   if (esAdmin) tabs.push({ id: "rendimiento", label: "Rendimiento" })
@@ -18711,7 +18884,7 @@ export default function App() {
 
   useEffect(() => {
     setSession(loadSession())
-    setSection(getSectionFromPathname(window.location.pathname))
+    if (normalizePathname(window.location.pathname) !== "/fichar") setSection(getSectionFromPathname(window.location.pathname))
     setUrlDoctorCtx(getDoctorCtxFromUrl())
     setAppReady(true)
   }, [])
@@ -18925,6 +19098,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !appReady) return
+    if (normalizePathname(window.location.pathname) === "/fichar") return // kiosko: no tocar la URL
     const nextPath = getPathnameFromSection(section)
     const currentPath = normalizePathname(window.location.pathname)
     if (currentPath === nextPath) return
@@ -18965,6 +19139,12 @@ export default function App() {
   const isPublicReserva = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reserva") === "1"
   if (isPublicReserva) {
     return <PublicBookingView />
+  }
+
+  // Kiosko de fichaje (iPad de recepción): ruta /fichar, sin login de la app.
+  const isKioskFichaje = typeof window !== "undefined" && normalizePathname(window.location.pathname) === "/fichar"
+  if (isKioskFichaje) {
+    return <KioskFichaje />
   }
 
   if (!session) {

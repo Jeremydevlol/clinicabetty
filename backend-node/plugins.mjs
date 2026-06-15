@@ -1930,6 +1930,52 @@ export function erpOperationsPlugin(supabaseUrl, serviceRoleKey, marketing = {})
             return sendJson(200, { ok: true, id: lead?.id })
           }
 
+          // ── KIOSKO DE FICHAJE (iPad de recepción) — público, valida por PIN ──
+          // No requiere sesión: cada empleado ficha con su PIN en un dispositivo compartido.
+          if (req.method === 'GET' && pathNorm === '/api/erp/fichar/clinicas') {
+            const { data: cs } = await admin.from('clinics').select('id, nombre').order('id')
+            return sendJson(200, { clinics: (cs || []).map(c => ({ id: c.id, nombre: c.nombre })) })
+          }
+          if (req.method === 'POST' && pathNorm === '/api/erp/fichar') {
+            const body = await parseBody()
+            const pin = String(body.pin || '').trim()
+            const clinicId = +body.clinicId || 0
+            const campo = body.campo ? String(body.campo) : null
+            if (!/^\d{4,8}$/.test(pin)) return sendJson(400, { error: 'PIN inválido (4 a 8 dígitos).' })
+            if (!clinicId) return sendJson(400, { error: 'Falta la clínica.' })
+            const { data: emp } = await admin.from('empleados')
+              .select('id, nombre, clinic_id, rol, activo, foto_url, color')
+              .eq('clinic_id', clinicId).eq('pin', pin).maybeSingle()
+            if (!emp || emp.activo === false) return sendJson(404, { error: 'PIN no reconocido en esta clínica.' })
+            const hoy = new Date().toISOString().slice(0, 10)
+            const selFich = 'id, entrada_at, almuerzo_inicio_at, almuerzo_fin_at, salida_at'
+            let { data: fich } = await admin.from('fichajes').select(selFich)
+              .eq('empleado_id', emp.id).eq('fecha', hoy).maybeSingle()
+            if (campo) {
+              const validos = ['entrada_at', 'almuerzo_inicio_at', 'almuerzo_fin_at', 'salida_at']
+              if (!validos.includes(campo)) return sendJson(400, { error: 'Acción inválida.' })
+              const nowIso = new Date().toISOString()
+              if (!fich) {
+                if (campo !== 'entrada_at') return sendJson(400, { error: 'Primero hay que fichar la entrada.' })
+                const { data: ins, error } = await admin.from('fichajes')
+                  .insert({ clinic_id: clinicId, empleado_id: emp.id, fecha: hoy, entrada_at: nowIso })
+                  .select(selFich).single()
+                if (error) return sendJson(400, { error: error.message })
+                fich = ins
+              } else {
+                if (fich[campo]) return sendJson(400, { error: 'Ese fichaje ya estaba registrado.' })
+                const { data: upd, error } = await admin.from('fichajes')
+                  .update({ [campo]: nowIso }).eq('id', fich.id).select(selFich).single()
+                if (error) return sendJson(400, { error: error.message })
+                fich = upd
+              }
+            }
+            return sendJson(200, {
+              empleado: { id: emp.id, nombre: emp.nombre, fotoUrl: emp.foto_url || '', color: emp.color || '' },
+              fichaje: fich || null,
+            })
+          }
+
           if (req.method === 'GET' && pathNorm.startsWith('/api/erp/bootstrap')) {
             const auth = await withAuth()
             if (auth.error) return sendJson(auth.code, { error: auth.error })
