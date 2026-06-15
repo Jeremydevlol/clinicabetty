@@ -2199,6 +2199,8 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession, onPersist,
 // ─── SECTION: AGENDA ─────────────────────────────────────────
 function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicOptionsProp = [], fullscreen = false, onReloadBonos }) {
   const compact = useMediaQuery("(max-width: 980px)")
+  // El especialista solo PUEDE VER la agenda: no crear, editar, cambiar estado ni borrar turnos.
+  const soloLectura = normalizeRol(role) === "especialista"
   const [calView, setCalView] = useState("semana")
   const [weekOffset, setWeekOffset] = useState(0)
   const [monthOffset, setMonthOffset] = useState(0)
@@ -2465,6 +2467,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   }, [open, data.servicios])
 
   const save = async () => {
+    if (soloLectura) return
     if (!canSaveTurno) {
       alert("Completá Cliente, Hora y Servicio para guardar el turno.")
       return
@@ -2539,6 +2542,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     setForm({ clinicId: targetClinic, clienteSelId:"", cliente:"", tel:"", dni:"", fecha:TODAY, hora:"", cat:"valoracion", servicio:"", salaTrabajo:"", obs:"", profesionalId:"" })
   }
   const del = async id => {
+    if (soloLectura) return
     if (!window.confirm("¿Eliminar este turno definitivamente?")) return
     if (import.meta.env.VITE_SUPABASE_URL) {
       const { error } = await supabase.from("turnos").delete().eq("id", id)
@@ -2555,6 +2559,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
     ...d.clinics[clinic], turnos: d.clinics[clinic].turnos.map(t => t.id===id ? { ...t, ...patch } : t)
   }}}))
   const setTurnoEstado = async (turnoId, nextEstado) => {
+    if (soloLectura) return
     if (!turnoId || !nextEstado) return
     if (import.meta.env.VITE_SUPABASE_URL) {
       const { error } = await supabase.from("turnos").update({ estado: nextEstado }).eq("id", turnoId)
@@ -2669,6 +2674,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
   }, [])
 
   const openNewTurnoAt = (dateStr, hora) => {
+    if (soloLectura) return
     setForm(f => ({ ...f, fecha: dateStr, hora: hora || "" }))
     setOpen(true)
   }
@@ -2739,8 +2745,8 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
             <option value="all">Todos los profesionales</option>
             {profsForClinic.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
           </select>
-          <Btn onClick={()=>setOpen(true)} style={{ height:32, padding:"0 14px", justifyContent:"center" }}><Plus size={14}/> Nuevo</Btn>
-          <Btn variant="outline" sm onClick={()=>setShowDisp(d=>!d)} title="Disponibilidad del personal"><Settings size={13}/></Btn>
+          {!soloLectura && <Btn onClick={()=>setOpen(true)} style={{ height:32, padding:"0 14px", justifyContent:"center" }}><Plus size={14}/> Nuevo</Btn>}
+          {!soloLectura && <Btn variant="outline" sm onClick={()=>setShowDisp(d=>!d)} title="Disponibilidad del personal"><Settings size={13}/></Btn>}
         </div>
       </div>
 
@@ -2844,10 +2850,16 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
                         <td style={{ padding:"11px 14px" }}><Badge type={t.estado}>{estadoLabel[t.estado]}</Badge></td>
                         <td style={{ padding:"11px 14px" }}>
                           <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                            {t.estado==="pendiente" && <Btn variant="outline" sm onClick={()=>void setTurnoEstado(t.id,"confirmado")}>Confirmar</Btn>}
-                            {t.estado==="confirmado" && <Btn sm onClick={()=>void setTurnoEstado(t.id,"en_sala")}>A sala</Btn>}
-                            {puedeQrAreaMedica(t) && <Btn variant="outline" sm title="QR área médica" onClick={()=>{setQrTurno(t);setQrOpen(true)}}><QrCode size={12}/></Btn>}
-                            <Btn variant="danger" sm onClick={()=>{setDetailTurno(t)}}><Trash2 size={11}/></Btn>
+                            {soloLectura ? (
+                              <Btn variant="outline" sm onClick={()=>setDetailTurno(t)}>Ver</Btn>
+                            ) : (
+                              <>
+                                {t.estado==="pendiente" && <Btn variant="outline" sm onClick={()=>void setTurnoEstado(t.id,"confirmado")}>Confirmar</Btn>}
+                                {t.estado==="confirmado" && <Btn sm onClick={()=>void setTurnoEstado(t.id,"en_sala")}>A sala</Btn>}
+                                {puedeQrAreaMedica(t) && <Btn variant="outline" sm title="QR área médica" onClick={()=>{setQrTurno(t);setQrOpen(true)}}><QrCode size={12}/></Btn>}
+                                <Btn variant="danger" sm onClick={()=>{setDetailTurno(t)}}><Trash2 size={11}/></Btn>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
