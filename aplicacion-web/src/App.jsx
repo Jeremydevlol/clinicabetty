@@ -2001,7 +2001,9 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession, onPersist,
             No hay turnos agendados para hoy.
             {onGoAgenda && (
               <div style={{ marginTop: 12 }}>
-                <Btn variant="outline" sm onClick={onGoAgenda}><Plus size={12}/> Agendar cita</Btn>
+                {isEspecialista
+                  ? <Btn variant="outline" sm onClick={onGoAgenda}><Calendar size={12}/> Ver agenda</Btn>
+                  : <Btn variant="outline" sm onClick={onGoAgenda}><Plus size={12}/> Agendar cita</Btn>}
               </div>
             )}
           </div>
