@@ -2764,6 +2764,12 @@ export function mediaUploadPlugin(supabaseUrl, serviceRoleKey) {
             res.statusCode = 400
             return res.end(JSON.stringify({ error: 'Path inválido' }))
           }
+          // Los PDF de consentimientos son documentos legales: no se pueden borrar
+          // por este endpoint genérico (se usa para reemplazar fotos de fichas).
+          if (path.replace(/^\/+/, '').startsWith('consentimientos/')) {
+            res.statusCode = 403
+            return res.end(JSON.stringify({ error: 'No se pueden borrar documentos de consentimiento.' }))
+          }
           const rm = await admin.storage.from('erp-media').remove([path])
           if (rm.error) {
             res.statusCode = 400

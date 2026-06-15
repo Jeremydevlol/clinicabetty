@@ -8666,7 +8666,7 @@ async function registrarPagoBono({ bono, clinicId, monto, metodoPago = "efectivo
     })
     if (error) throw new Error(error.message || String(error))
     if (syncContabilidad && m > 0) {
-      await supabase.from("clinic_movimientos").insert({
+      const { error: eMov } = await supabase.from("clinic_movimientos").insert({
         clinic_id: +clinicId,
         tipo: "ingreso",
         fecha,
@@ -8674,6 +8674,9 @@ async function registrarPagoBono({ bono, clinicId, monto, metodoPago = "efectivo
         cat: "servicios",
         monto: m,
       })
+      // El pago del bono sí quedó; si falla el asiento contable hay que avisar
+      // para que el ingreso no quede fuera de los libros.
+      if (eMov) throw new Error("El abono se registró, pero no se reflejó en contabilidad: " + (eMov.message || ""))
     }
     return
   }
@@ -8697,7 +8700,9 @@ async function usarSesionBono({ bono, clinicId, turnoId = null, cobroMonto = 0, 
     const { error: eUpd } = await supabase.from("bonos_packs").update({ sesiones_usadas: numeroSesion }).eq("id", bono.id)
     if (eUpd) throw new Error(eUpd.message || String(eUpd))
     if (turnoId) {
-      await supabase.from("turnos").update({ bono_id: bono.id }).eq("id", turnoId)
+      // Si no se vincula el turno al bono, el turno podría volver a cobrarse aparte.
+      const { error: eLink } = await supabase.from("turnos").update({ bono_id: bono.id }).eq("id", turnoId)
+      if (eLink) throw new Error("Sesión descontada del bono, pero no se vinculó al turno: " + (eLink.message || ""))
     }
     if (cobro > 0) {
       await registrarPagoBono({ bono, clinicId, monto: cobro, metodoPago, notas: notas ? `Sesión ${numeroSesion}: ${notas}` : `Cobro sesión ${numeroSesion}`, fecha, syncContabilidad })
