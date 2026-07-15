@@ -44,7 +44,10 @@ import {
   exportMediapipeCaptureBundle,
 } from "./lib/faceProportionOverlay.js"
 // ─── CONSTANTS & HELPERS ─────────────────────────────────────
-const TODAY = new Date().toISOString().split("T")[0]
+// Fecha local YYYY-MM-DD. No usar toISOString() para fechas de calendario:
+// convierte a UTC y corre el día (p. ej. medianoche en Madrid → día anterior).
+const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+const TODAY = localISO(new Date())
 
 /**
  * Análisis clínico-estético del rostro (OpenAI Vision vía backend).
@@ -1856,7 +1859,7 @@ function Dashboard({ data, clinic, setData, role, onOpenTurnoSession, onPersist,
   const revenueData = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart)
     d.setDate(weekStart.getDate() + i)
-    const iso = d.toISOString().slice(0, 10)
+    const iso = localISO(d)
     const movsDia = cd.movimientos.filter(m => m.fecha === iso)
     return {
       d: iso === TODAY ? "Hoy" : dayLabel[i],
@@ -2936,7 +2939,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
           {/* Grid de días */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
             {monthGridDays.map((d, i) => {
-              const ds = d.toISOString().slice(0,10)
+              const ds = localISO(d)
               const isToday = ds === TODAY
               const isCurMonth = d.getMonth() === monthDate.getMonth()
               const dayTurnos = turnos.filter(t => t.fecha === ds)
@@ -3004,7 +3007,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
           <div style={{ display:"grid", gridTemplateColumns:`52px repeat(${viewDays.length},1fr)`, borderBottom:`1.5px solid ${C.border}`, background:C.card, zIndex:10 }}>
             <div style={{ borderRight:`1px solid ${C.border}` }}/>
             {viewDays.map((d,i) => {
-              const ds = d.toISOString().slice(0,10)
+              const ds = localISO(d)
               const isToday = ds===TODAY
               const dow = (d.getDay()+6)%7
               const cnt = turnos.filter(t=>t.fecha===ds).length
@@ -3034,7 +3037,7 @@ function Agenda({ data, clinic, setData, onPersist, role, clinicOptions: clinicO
 
               {/* Columnas de días */}
               {viewDays.map((d,colI) => {
-                const ds = d.toISOString().slice(0,10)
+                const ds = localISO(d)
                 const isToday = ds===TODAY
                 const dayTurnos = turnos.filter(t=>t.fecha===ds)
                 const { numCols, assignment } = computeColumns(dayTurnos)
@@ -4830,7 +4833,7 @@ function Contabilidad({ data, clinic, setData }) {
     for (let i = 13; i >= 0; i--) {
       const d = new Date()
       d.setDate(d.getDate() - i)
-      const key = d.toISOString().split("T")[0]
+      const key = localISO(d)
       const dayMovs = movs.filter(m => m.tipo === "ingreso" && m.fecha === key)
       days.push({ fecha: key, label: `${d.getDate()}/${d.getMonth()+1}`, total: dayMovs.reduce((a,m)=>a+m.monto,0) })
     }
@@ -11374,7 +11377,7 @@ function MarketingHub({ data, setData, clinic }) {
   const reactivar = useMemo(() => {
     const dias = mk.reactivacionDias || 30
     const lim = new Date(); lim.setDate(lim.getDate() - dias)
-    const limStr = lim.toISOString().split("T")[0]
+    const limStr = localISO(lim)
     return pacientesClinica.filter(p => {
       const vis = (p.visitas || []).map(v => v.fecha).sort().pop()
       return vis && vis < limStr
