@@ -719,7 +719,17 @@ function getAppBaseUrl() {
     } catch { /* ignore */ }
   }
 
-  if (envTrim) return envTrim
+  // En producción una URL de LAN/localhost en VITE_PUBLIC_APP_URL (resto de dev)
+  // rompería los QR para cualquier móvil: usar el origin real del deploy.
+  const envEsPrivada = (() => {
+    if (!envTrim) return false
+    try {
+      const h = new URL(envTrim).hostname
+      return h === "localhost" || h === "127.0.0.1" || h === "[::1]" ||
+        /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    } catch { return true }
+  })()
+  if (envTrim && (import.meta.env.DEV || !envEsPrivada)) return envTrim
 
   const { origin, pathname } = window.location
   const path = pathname === "/" ? "" : pathname.replace(/\/$/, "")
